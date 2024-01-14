@@ -73,8 +73,7 @@ theme_mode: # [light|dark]
 img_cdn:
 
 # the avatar on sidebar, support local or CORS resources
-avatar: https://raw.githubusercontent.com/ryennewhite/ryennewhite.github.io/main/images/DB4F888F-C2A0-4900-BE4B-53122D5A63D6.PNG
-
+avatar: https://raw.githubusercontent.com/ryennewhite/ryennewhite.github.io/main/images/cropped.PNG
 # The URL of the site-wide social preview image used in SEO `og:image` meta tag.
 # It can be overridden by a customized `page.image` in front matter.
 social_preview_image: # string, local or CORS resources
