@@ -25,7 +25,7 @@ Google Hacking uses the Google Search Engine to refine search query results and 
 
 Common Usage Examples:
 
-```dcl
+```console
 site:target.comfiletype:php
 -filetype:html  // the "-" sign here excludes html pages from search results
 intitle:"index of" "parent directory"
