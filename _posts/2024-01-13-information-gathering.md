@@ -5,6 +5,8 @@ categories: [OSCP]
 tags: [oscp, pen200, offsec, certs]     # TAG names should always be lowercase
 ---
 
+*The Information Gathering tools and tactics reviewed here are presented specifically in preparation for the OSCP exam per course suggestions and are by no means replacements for the OSCP training course, nor comprehensive guides for this step in the Kill Chain.*
+
 # Information Gathering
 
 ## Passive Information Gathering - OSINT
