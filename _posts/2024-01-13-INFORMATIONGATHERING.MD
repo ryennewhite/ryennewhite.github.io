@@ -13,7 +13,7 @@ tags: [oscp, pen200, offsec, certs]     # TAG names should always be lowercase
 
 Whois uses TCP to gather information on a domain name, like its registrar and name server.
 
-```
+```console
 $ whois target.com -h ipofmywhoisserver
 $ whois targetip -h ipofmywhoisserver
 ```
@@ -45,20 +45,20 @@ Additional Resources:
 
 GitHub Search
 
-```
+```console
 owner:targetorg
 path:users
 ```
 
 [Gitleaks](https://github.com/gitleaks/gitleaks)
 
-```
+```console
 $ ./gitleaks -v -r=https://github/com/targetrepository
 ```
 
 [Gitrob](https://github.com/michenriksen/gitrob)
 
-```
+```console
 $ ./gitrob targetuser
 ```
 
@@ -67,7 +67,7 @@ $ ./gitrob targetuser
 
 [Shodan](https://www.shodan.io/) crawls the internet for connected servers, routers, IoT, and more, discovering IPs, ports, running services, and technologies.
 
-```
+```console
 hostname:target.com
 ```
 
@@ -97,7 +97,7 @@ DNS Record Types:
 - CNAME: Canonical Name, creates aliases for other host records
 - TXT: Various purposes, can contain arbitrary data
 
-```java
+```console
 $ host www.target.com
 $ host -t mx target.com
 $ host -t txt target.com
@@ -119,18 +119,18 @@ $ for ip in $(seq 200 254); do host 111.111.111.$ip; done | grep -v "not found"
 ```
 
 [DNSRecon](https://github.com/darkoperator/dnsrecon)
-```java
+```console
 $ dnsrecon -d target.com -t std  // -d for domain and -t std for type = standard
 $ dnsrecon -d target.com -D ~/list.txt -t brt
 ```
 
 DNSenum
-```
+```console
 $ dnsenum target.com
 ```
 
 Nslookup
-```
+```console
 $ nslookup mail.target.com
 $ nslookup -type=TXT info.target.com targetip
 ```
@@ -140,7 +140,7 @@ $ nslookup -type=TXT info.target.com targetip
 
 Netcat
 
-```java
+```console
 $ nc -nvv -w 1 -z targetip 3388-3390  // -w for timeout, -z for zero-I/O mode
 $ nc -nv -u -z -w 1 targetip 120-123  // -u for UDP scan
 ```
@@ -150,7 +150,7 @@ $ nc -nv -u -z -w 1 targetip 120-123  // -u for UDP scan
 
 Nmap
 
-```java
+```console
 $ nmap targetip
 $ nmap -p 1-65535 targetip
 $ sudo nmap -sS targetip  // stealth SYN scan
@@ -170,14 +170,14 @@ $ nmap -sV -A targetip  // -sV for plain service scan
 
 Nmap Scripting Engine (NSE) - /usr/share/nmap/scripts
 
-```java
+```console
 $ nmap --script http-headers targetip  // connects to http service on target and reports supported headers
 
 ```
 
 On Windows? Use PowerShell:
 
-```java
+```console
 > Test-NetConnection -Port 445 targetip  // SMB port 445
 > 1..1024 | % {echo ((New-Object Net.Sockets.TcpClient).Connect("targetip", $_)) "TCP port $_ is open"} 2>$null  // one-liner to scan first 1024 ports
 ```
@@ -185,24 +185,24 @@ On Windows? Use PowerShell:
 
 ### SMB Enumeration
 
-```java
+```console
 $ nmap -v -p 139,445 -oG smb.txt 111.111.111.1-254  // enumerates SMB and NetBIOS over TCP
 ```
 
 nbtscan - identifies NetBIOS information
-```java
+```console
 $ sudo nbtscan -r 111.111.111.0/24
 $ ls -1 /usr/share/nmap/scripts/smb*  // find nmap NSE scripts for discovery & enum
 $ nmap -v -p 139,445 --script smb-os-discovery targetip
 ```
 
 On Windows? 
-```java
+```console
 > net view \\dc01 /all  // net view lists domains, resources, and computers belonging to a host
 ```
 
 Enumerate what you found:
-```
+```console
 $ enum4linux -a 111.111.111.0/24
 ```
 
@@ -210,7 +210,7 @@ $ enum4linux -a 111.111.111.0/24
 ### SMTP Enumeration
 
 Found a host listening for SMTP?
-```java
+```console
 $ nc -nv targetip 25
 $ VRFY root  // any username
 ```
@@ -251,13 +251,13 @@ s.close()
 ```
 
 Run script:
-```
+```console
 $ python3 smtp.py root targetip
 $ python3 smtp.py johndoe targetip
 ```
 
 On Windows?
-```java
+```console
 > Test-NetConnection -Port 25 targetip  // cannot interact with SMTP Service
 
 // so, install Telnet (requires admin privs)
@@ -276,12 +276,12 @@ SNMP MIB Trees contain network management information.
 <img width="232" alt="image" src="https://github.com/ryennewhite/study-oscp/assets/112822039/f6c4740d-fa75-4029-8af1-5d94546d9d7d">
 
 
-```java
+```console
 $ sudo nmap -sU --open -p 161 111.111.111.1-254 -oG open-snmp.txt  // scan for open snmp ports (use -U for UDP!)
 ```
 
 Or, we can use onesixtyone to brute force a list of IPs.
-```
+```console
 $ echo public > community
 $ echo private >> community
 $ echo manager >> community
@@ -290,7 +290,7 @@ $ onesixtyone -c community -i ips
 ```
 
 Using MIB values from the above screenshot, we can enumerate further.
-```java
+```console
 $ snmpwalk -c public -v1 -t 10 targetip  // -c to enum the entire MIB tree
 $ snmpwalk -c public -v1 targetip 1.3.6.1.4.1.77.1.2.25  // enums users
 $ snmpwalk -c public -v1 targetip 1.3.6.1.2.1.25.4.2.1.2  // enums running processes
