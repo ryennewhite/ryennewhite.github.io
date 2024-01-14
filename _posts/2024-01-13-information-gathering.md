@@ -87,7 +87,7 @@ This includes information on the missing security headers we can attempt to leve
 [SSL Server Test](https://www.ssllabs.com/ssltest/) compares a site's SSL/TLS config against industry standard best practices.
 
 
-## Active Information Gatherting
+## Active Information Gathering
 
 ### DNS Enumeration
 
@@ -174,7 +174,9 @@ $ nmap -sT -A targetip  // -A to run OS and service enum scripts
 $ nmap -sV -A targetip  // -sV for plain service scan
 ```
 
-Nmap Scripting Engine (NSE) - /usr/share/nmap/scripts
+Nmap Scripting Engine (NSE)
+
+See all available Nmap Scripts in /usr/share/nmap/scripts.
 
 ```console
 $ nmap --script http-headers targetip  // connects to http service on target and reports supported headers
