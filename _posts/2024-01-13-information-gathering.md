@@ -25,7 +25,7 @@ $ whois targetip -h ipofmywhoisserver
 
 Google Hacking uses the Google Search Engine to refine search query results and uncover critical information using special operators.
 
-Common Usage Examples:
+Within the Google Search Engine Bar, try:
 
 ```
 site:target.com filetype:php
@@ -44,6 +44,8 @@ Additional Resources:
 
 
 ### Open-Source Code
+
+We can search open-source code for credentials and other sensitive information left behind by developers.
 
 GitHub Search
 
@@ -68,6 +70,8 @@ $ ./gitrob targetuser
 ### Shodan
 
 [Shodan](https://www.shodan.io/) crawls the internet for connected servers, routers, IoT, and more, discovering IPs, ports, running services, and technologies.
+
+Within the Shodan search engine, try:
 
 ```
 hostname:target.com
@@ -211,7 +215,7 @@ $ enum4linux -a 111.111.111.0/24
 
 ### SMTP Enumeration
 
-Found a host listening for SMTP?
+Found a host listening for SMTP? Try connecting and checking for users.
 ```console
 $ nc -nv targetip 25
 $ VRFY root  // any username
