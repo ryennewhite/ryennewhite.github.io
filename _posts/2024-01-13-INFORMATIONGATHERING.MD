@@ -25,8 +25,8 @@ Google Hacking uses the Google Search Engine to refine search query results and 
 
 Common Usage Examples:
 
-```console
-site:target.comfiletype:php
+```
+site:target.com filetype:php
 -filetype:html  // the "-" sign here excludes html pages from search results
 intitle:"index of" "parent directory"
 ```
@@ -45,7 +45,7 @@ Additional Resources:
 
 GitHub Search
 
-```console
+```
 owner:targetorg
 path:users
 ```
@@ -67,7 +67,7 @@ $ ./gitrob targetuser
 
 [Shodan](https://www.shodan.io/) crawls the internet for connected servers, routers, IoT, and more, discovering IPs, ports, running services, and technologies.
 
-```console
+```
 hostname:target.com
 ```
 
