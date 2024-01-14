@@ -272,7 +272,8 @@ On Windows?
 
 SMTP uses UDP, making it stateless and vulnerable to spoofing and relays. It is also often not encrypted, allowing us to intercept creds and other sensitive information.
 
-SNMP MIB Trees contain network management information. 
+SNMP MIB Trees contain network management information.
+
 <img width="232" alt="image" src="https://github.com/ryennewhite/study-oscp/assets/112822039/f6c4740d-fa75-4029-8af1-5d94546d9d7d">
 
 
