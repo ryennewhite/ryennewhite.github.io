@@ -1,6 +1,6 @@
 ---
 title: Information Gathering
-date: 2024-01-13 `0:04:00 -0600
+date: 2024-01-13 10:04:00 -0600
 categories: [OSCP]
 tags: [oscp, pen200, offsec, certs]     # TAG names should always be lowercase
 ---
