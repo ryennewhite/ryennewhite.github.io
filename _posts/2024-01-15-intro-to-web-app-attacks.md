@@ -204,4 +204,4 @@ Navigate to Burp's Repeater tab. Here, create a new empty request and fill it wi
 After you've tested all interesting APIs, go to the Target tab and observe the Site map. From here, you can forward saved requests to Repeater or Intruder to test further.
 
 
-
+## Cross-Site Scripting
