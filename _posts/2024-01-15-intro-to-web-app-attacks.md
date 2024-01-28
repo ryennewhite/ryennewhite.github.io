@@ -12,3 +12,10 @@ With the knowledge of common web app vulnerabilities, such as what we can learn 
 
 ## Web Application Assessment Tools
 
+### Fingerprinting Web Servers with Nmap
+```console
+$ sudo nmap -p80 -sV 111.111.111.111
+$ sudo nmap -p80 --script=http-enum 111.111.111.111    // script performs initial fingerprinting of webserver
+```
+
+### Tech Stack Identification with Wappalyzer
