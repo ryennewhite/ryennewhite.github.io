@@ -196,7 +196,7 @@ We can recreate all of the above steps in Burp:
 Replicate the last admin login attempt and sent to the proxy appending the --proxy 127.0.0.1:8080 to the command.
 
 ```console
-curl -d '{"password":"pwned","username":"admin"}' -H 'Content-Type: application/json'  http://192.168.50.16:5002/users/v1/login --proxy 127.0.0.1:8080
+$ curl -d '{"password":"pwned","username":"admin"}' -H 'Content-Type: application/json'  http://192.168.50.16:5002/users/v1/login --proxy 127.0.0.1:8080
 ```
 
 Navigate to Burp's Repeater tab. Here, create a new empty request and fill it with the same data as we used in the above command. You should see the same behavior, and now you can test more APIs, faster.
