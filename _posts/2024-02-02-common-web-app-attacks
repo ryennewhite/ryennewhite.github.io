@@ -1,0 +1,79 @@
+---
+title: Common Web App Attacks
+date: 2024-02-02 08:15:00 -0600
+categories: [OSCP]
+tags: [oscp, pen200, offsec, certs]     # TAG names should always be lowercase
+---
+*The Web App Attack tools and tactics reviewed here are presented specifically in preparation for the OSCP exam per course suggestions and are by no means replacements for the OSCP training course, nor comprehensive guides for this step in the Kill Chain.*
+
+# Common Web App Attacks
+
+## Directory Traversal
+
+### Absolute vs Relative Paths
+
+When referencing an absolute path, specify the the full file system path including subdirectories. The absolute path can be referred to from any location in the filesystem. Since /etc/passwd is in the root directory, we can use it from any location in the filesystem.
+
+Relative paths make use of ../ to move backwards in the filesystem and can be stacked:
+
+```console
+$ cat ../../../../etc.passwd
+```
+
+We could use this when we don't know what our current working directory is. By using a large number of ../, we can ensure we reach the root file system. 
+
+### Identifying and Exploiting Directory Traversals
+
+In Directory Traversal attacks, we can access sensitive files of web servers. This is possible when web apps do not sanitize user input.
+
+On Linux systems, web server files are typically displayed from the web root /var/www/html. Typically, the webpage http://website.com/afile.html is accessing the file at /var/www/html/afile.html. When web apps are vulnerable to directory traversal, we can access files outside of the web root.
+
+Let's analyze the following link for vulnerabilities: https://website.com/customer/login.php?language=en.html
+- login.php - the site uses PHP!
+- ?language= - the site contains a language parameter. We should try to navigate to that file directly (https://website.com/home/en.html). If it opens successfully, we can try to use other file names.
+- /customer/ - the web root contains a subdirectory
+
+Hypothetically, we may find a link such as: http://website.com/customer/index.php?page=admin.php
+- This site uses PHP and has a ?page= parameter.
+- PHP uses $_GET to manage variables via a GET request.
+- Try: http://website.com/customer/index.php?page=../../../../../../../../../etc/passwd
+
+Web servers are typically ran in the context of a dedicated users, such as www-data, who have limited perms on the system. However, some users and admins set excessive permissions for file access. Due to this, we should always check for SSH keys and their perms.
+
+SSH keys are usually in the home directory of a user in the .ssh folder. 
+
+/etc/passwd contains the home directory path of all users, and we can try to display the content of a user's private key:
+
+http://website.com/customer/index.php?page=../../../../../../../../../home/targetuser/.ssh/id_rsa
+- Replace "targetuser" above with a legitimate user listed in /etc/passwd.
+
+Once you identify a vulnerability, don't rely on the browser! Use cURL to avoid the alterations browsers make.
+
+```console
+$ curl http://website.com/customer/index.php?page=../../../../../../../../home/targetuser/.ssh/id_rsa
+```
+
+Copy and paste the key from ---BEGIN OPENSSH PRIVATE KEY--- to ---END OPENSSH PRIVATE KEY--- into a file called dt_key. 
+
+Change the file permissions of dt_key so that only the user/owner can read the file. This avoids future errors.
+
+```console
+$ chmod 400 dt_key
+```
+
+Using this key, let's try to connect to the target system via SSH on port 2222. Use the -i parameter to specify the dt_key file.
+
+```console
+$ ssh -i dt_key -p 2222 targetuser@website.com
+```
+
+### Directory Traversal Attacks on Windows
+
+On Windows, instead of /etc/passwd, we use C:\Windows\System32\drivers\etc\hosts to test directory traversal vulnerabilities. After verifying this works, you can test traversing to other sensitive files. It is generally more difficult to execute directory traversal for system access on Windows than it is on Linux. There is no direct equivalent in Windows to the Linux steps taken above.
+
+Sensitive files are additionally less easy to find on Windows without listing directory contents. To get around this, we should investigate the web app more closely and gather information about the server framework, language, etc.
+
+Once we know about the web server, we can use this information to research paths to sensitive files. Research a server's log paths and web root structure. For example, if a system is running the Internet Information Services (IIS) web server, the logs are located at C:\inetpub\logs\LogFiles\W3SVC1\. We should also always check C:\inetpub\wwwroot\web.config, which might have usernames and passwords.
+
+We may find web apps on Windows which are only vulnerable to directory traversals using backslashes. Always try both when a web app is running on Windows.
+
