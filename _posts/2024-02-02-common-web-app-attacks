@@ -77,3 +77,38 @@ Once we know about the web server, we can use this information to research paths
 
 We may find web apps on Windows which are only vulnerable to directory traversals using backslashes. Always try both when a web app is running on Windows.
 
+### Encoding Special Characters
+
+Let's exploit a directory traversal vuln in Apache 2.4.49, which is exploitable by specifying the cgi-nim directory in the URL. 
+
+```console
+$ curl http://111.111.111.111/cgi-bin/../../../../../../../../../../../../../etc/passwd
+
+// some error prevents this?
+```
+
+TIP: The ../../../ sequence is often filtered by web application firewalls, web servers, or web apps due to it being a common abuse method.v
+
+To get around this, we can use https://www.w3schools.com/tags/ref_urlencode.asp (aka Percent Encoding). We can leverage ASCII encoding lists that can encode our query, or we can use online converters.
+
+URL encoding is typically used to convert characters in a web request into a internet-transmissable format. Poorly configured filters may block ../ but not %2e@2e/.
+
+If we only encode the periods, we get:
+
+```console
+curl http://111.111.111.111/cgi-bin/%2e%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd
+```
+
+## File Inclusion Vulnerabilities
+
+# Local File Inclusion (LFI)
+
+Firstly, mixing up a File Inclusion vuln with a Directory Traversal vuln can result in us missing an opportunity to execute arbitrary code!
+
+Directory Traversal allows us to obtain contents of a file that are not in the server's web root.
+
+File Inclusion allows us to "include" a file in the app's running code, which means we can execute local or remote files.
+
+If we exploit a Directory Traversal vuln on the admin.php file, we'll see the source code. However, if we exploit a File Inclusion vuln, we'll have admin.php executed.
+
+Our goal is to conduct Remote Code Execution (RCE) via a Local File Inclusion vuln, and we will do this with Log Poisoning, which modifies data we send to a webapp so the logs contain executable code.
