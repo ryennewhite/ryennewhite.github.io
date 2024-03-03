@@ -1,6 +1,6 @@
 ---
 title: Common Web App Attacks
-date: 2024-03-02 08:15:00 -0600
+date: 2024-02-02 08:15:00 -0600
 categories: [OSCP]
 tags: [oscp, pen200, offsec, certs]     # TAG names should always be lowercase
 ---
