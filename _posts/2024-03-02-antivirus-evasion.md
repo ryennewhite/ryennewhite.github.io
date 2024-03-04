@@ -1,6 +1,6 @@
 ---
 title: Antivirus Evasion
-date: 2024-02-24 06:30:00 -0600
+date: 2024-03-02 06:30:00 -0600
 categories: [OSCP]
 tags: [oscp, pen200, offsec, certs]     # TAG names should always be lowercase
 ---
