@@ -1029,3 +1029,42 @@ john
 ```
 
 ## Abusing Other Windows Components
+
+### Scheduled Tasks
+
+Task Scheduler automates things like cleam-ups or update management. Tasks have one or more triggers, such us a time and date, at log on, or on a Windows event. The configs of a task can be found in the Conditions, Settings, and General menu tabs of the task's property.
+
+We need to know 3 things to identify if privilege escalation is possible through a scheduled task:
+- User account (principal) that executes the task - If a task is run as NT AUTHORITY/SYSTEM or as an admin user, we can get privilege escalation.
+- Triggers specified for the task - If a trigger was met in the past, the task will not run again in the future, or if the time trigger occurs after the deadline for our pentest (you should still mention this finding in your report)
+- Actions executed when one or more of the triggers are met - in most cases, we can use familiar tactics like replacing the binary or placing a missing DLL. We don't have a service binary for scheduled tasks, but we have programs and scripts specified by the actions.
+
+```console
+PS C:\Users\steve> Get-ScheduledTask
+PS C:\Users\steve> schtasks /query /fo LIST /v
+...
+Folder: \Microsoft
+HostName:                             CLIENTWK220
+TaskName:                             \Microsoft\CacheCleanup
+Next Run Time:                        7/11/2022 2:47:21 AM
+Status:                               Ready
+Logon Mode:                           Interactive/Background
+Last Run Time:                        7/11/2022 2:46:22 AM
+Last Result:                          0
+Author:                               CLIENTWK220\daveadmin
+Task To Run:                          C:\Users\steve\Pictures\BackendCacheCleanup.exe
+Start In:                             C:\Users\steve\Pictures
+Comment:                              N/A
+Scheduled Task State:                 Enabled
+Idle Time:                            Disabled
+Power Management:                     Stop On Battery Mode
+Run As User:                          daveadmin
+Delete Task If Not Rescheduled:       Disabled
+Stop Task If Runs X Hours and X Mins: Disabled
+Schedule:                             Scheduling data is not available in this format.
+Schedule Type:                        One Time Only, Minute
+Start Time:                           7:37:21 AM
+Start Date:                           7/4/2022
+...
+```
+
