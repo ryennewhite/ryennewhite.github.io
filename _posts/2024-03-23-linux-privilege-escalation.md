@@ -189,8 +189,11 @@ $ dpkg -l
 // if target is Red Hat
 $ rpm
 
-// find writable files and see if they match what you found
+// find writable dirs and see if they match what you found
 $ find / -writable -type d 2>/dev/null
+
+// or look at writable FILES
+$ find / -writable -type f 2>/dev/null
 ```
 
 Moving on to drives. Drives are usually auto-mounted at boot and it can be easy to forget about unmounted drives that we mat find info in. Always look for unmounted drives and the mount permissions.
