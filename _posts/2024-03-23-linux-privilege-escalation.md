@@ -1,0 +1,133 @@
+---
+title: Linux Privilege Escalation
+date: 2024-03-23 10:08:00 -0600
+categories: [OSCP]
+tags: [oscp, pen200, offsec, certs]     # TAG names should always be lowercase
+---
+*The Linux Privilege Escalation tools and tactics reviewed here are presented specifically in preparation for the OSCP exam per course suggestions and are by no means replacements for the OSCP training course, nor comprehensive guides for this step in the Kill Chain.*
+
+# Linux Privilege Escalation
+
+Let's enumerate Linux machines and conduct privilege escalation from insecure file permissions and misconfigured system components.
+
+## Enumerating Linux
+
+### File and User Privileges on Linux
+
+In UNIX, most resources like files, dirs, devices, and network comms are represented in the filesystem. Every file abides by user and group perms based on read, write, and execute, for the owner, owner group, and others group.
+
+Directories are handled different than files. Read access lets you consult the list of contents (files and dirs), Write access lets you create and delete files, and Execute access allows crossing through the directory to access contents (like using cd). Being able to cross through a directory without being able to read it gives the user permission to access known entries, but only by knowing their exact name.
+
+Example:
+
+```console
+kali@kali:~$ ls -l /etc/shadow
+-rw-r----- 1 root shadow 1751 May  2 09:31 /etc/shadow
+```
+
+The first hyphen is for the file type. The next three are the owner perms (rw). The next are the shadow group owner perms.  Lastly, the others group.
+
+### Manual Enumeration
+
+Some commands in this section may require minor modifications one different target OSs, and they will not always be reproducible on the dedicated clients.
+
+```console
+kali:~$ ssh joe@111.111.111.111
+
+// get user context
+
+$ id
+uid=1000(joe) gid=1000(joe) groups=1000(joe),24(cdrom),25(floppy),29(audio),30(dip),44(video),46(plugdev),109(netdev),112(bluetooth),116(lpadmin),117(scanner)
+
+// enum all users via passwd file
+
+$ cat /etc/passwd
+root:x:0:0:root:/root:/bin/bash
+daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+bin:x:2:2:bin:/bin:/usr/sbin/nologin
+sys:x:3:3:sys:/dev:/usr/sbin/nologin
+...
+www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+...
+dnsmasq:x:106:65534:dnsmasq,,,:/var/lib/misc:/usr/sbin/nologin
+usbmux:x:107:46:usbmux daemon,,,:/var/lib/usbmux:/usr/sbin/nologin
+rtkit:x:108:114:RealtimeKit,,,:/proc:/usr/sbin/nologin
+sshd:x:109:65534::/run/sshd:/usr/sbin/nologin
+...
+Debian-gdm:x:117:124:Gnome Display Manager:/var/lib/gdm3:/bin/false
+joe:x:1000:1000:joe,,,:/home/joe:/bin/bash
+systemd-coredump:x:999:999:systemd Core Dumper:/:/usr/sbin/nologin
+eve:x:1001:1001:,,,:/home/eve:/bin/bash
+
+// we can see that a web server (www-data) and an SSH server (sshd) are running on this target.
+```
+
+From the Passwd file:
+- Login Name - joe
+- Encrypted Password -"x - this field would typically contain the hashed version of the user's passowrd, but the x indicated the entire password hash is in the /etc/shadow file
+- UID - 1000 - root user always has UID of 0, and then Linux counts regualar users from 1000 (aka the real user ID)
+- GID - 1000 - the user's specific Group ID
+- Comment - joe,,, - field usually contrains a description of the user, often just the username
+- Home Folder: /home/joe - the user's home dir prompted upon login
+- Login Shell: /bin/bash - the default interactive shell, if one exists
+
+Eve is another user who we can assume to be a standard user due to the account's configured home dir of /home/eve. System services are configed with the /usr/sbin/nologin as login shell, where the nologin statement is used to block any remote or local login for svc accounts.
+
+Next - hostname. Enterprises often have a naming convention so they can indicate location, description, OS, and service level.
+
+```console
+$ hostname
+debian-privesc
+```
+
+Sometimes we need to rely on kernel exploits that attack in the core of a target's OS. These are very specific for each OS and version. Mismatches can cause crashes or instability.
+
+The /etc/issue and /etc/*-release files have info on the OS release and version.
+
+```console
+joe@debian-privesc:~$ cat /etc/issue
+Debian GNU/Linux 10 \n \l
+
+joe@debian-privesc:~$ cat /etc/os-release
+PRETTY_NAME="Debian GNU/Linux 10 (buster)"
+NAME="Debian GNU/Linux"
+VERSION_ID="10"
+VERSION="10 (buster)"
+VERSION_CODENAME=buster
+ID=debian
+HOME_URL="https://www.debian.org/"
+SUPPORT_URL="https://www.debian.org/support"
+BUG_REPORT_URL="https://bugs.debian.org/"
+
+joe@debian-privesc:~$ uname -a
+Linux debian-privesc 4.19.0-21-amd64 #1 SMP Debian 4.19.249-2 (2022-06-30)
+x86_64 GNU/Linux
+```
+
+To leverage the running processes and services in privilege escalation, we need the process to run in the context of a privileged accountm and it must either have insecure perms or allow us to interact with it in unintended ways.
+
+```console
+$ ps aux
+USER       PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+root         1  0.0  0.4 169592 10176 ?        Ss   Aug16   0:02 /sbin/init
+...
+colord     752  0.0  0.6 246984 12424 ?        Ssl  Aug16   0:00 /usr/lib/colord/colord
+Debian-+   753  0.0  0.2 157188  5248 ?        Sl   Aug16   0:00 /usr/lib/dconf/dconf-service
+root       477  0.0  0.5 179064 11060 ?        Ssl  Aug16   0:00 /usr/sbin/cups-browsed
+root       479  0.0  0.4 236048  9152 ?        Ssl  Aug16   0:00 /usr/lib/policykit-1/polkitd --no-debug
+root       486  0.0  1.0 123768 22104 ?        Ssl  Aug16   0:00 /usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal
+root       510  0.0  0.3  13812  7288 ?        Ss   Aug16   0:00 /usr/sbin/sshd -D
+root       512  0.0  0.3 241852  8080 ?        Ssl  Aug16   0:00 /usr/sbin/gdm3
+root       519  0.0  0.4 166764  8308 ?        Sl   Aug16   0:00 gdm-session-worker [pam/gdm-launch-environment]
+root       530  0.0  0.2  11164  4448 ?        Ss   Aug16   0:03 /usr/sbin/apache2 -k start
+root      1545  0.0  0.0      0     0 ?        I    Aug16   0:00 [kworker/1:1-events]
+root      1653  0.0  0.3  14648  7712 ?        Ss   01:03   0:00 sshd: joe [priv]
+root      1656  0.0  0.0      0     0 ?        I    01:03   0:00 [kworker/1:2-events_power_efficient]
+joe       1657  0.0  0.4  21160  8960 ?        Ss   01:03   0:00 /lib/systemd/systemd --user
+joe       1658  0.0  0.1 170892  2532 ?        S    01:03   0:00 (sd-pam)
+joe       1672  0.0  0.2  14932  5064 ?        S    01:03   0:00 sshd: joe@pts/0
+joe       1673  0.0  0.2   8224  5020 pts/0    Ss   01:03   0:00 -bash
+root      1727  0.0  0.0      0     0 ?        I    03:00   0:00 [kworker/0:0-ata_sff]
+root      1728  0.0  0.0      0     0 ?        I    03:06   0:00 [kworker/0:2-ata_sff]
+joe       1730  0.0  0.1  10600  3028 pts/0    R+   03:10   0:00 ps axu
+```
