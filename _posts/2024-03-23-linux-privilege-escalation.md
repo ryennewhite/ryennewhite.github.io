@@ -104,7 +104,7 @@ Linux debian-privesc 4.19.0-21-amd64 #1 SMP Debian 4.19.249-2 (2022-06-30)
 x86_64 GNU/Linux
 ```
 
-To leverage the running processes and services in privilege escalation, we need the process to run in the context of a privileged accountm and it must either have insecure perms or allow us to interact with it in unintended ways.
+To leverage the running processes and services in privilege escalation, we need the process to run in the context of a privileged account and it must either have insecure perms or allow us to interact with it in unintended ways.
 
 ```console
 $ ps aux
@@ -131,3 +131,99 @@ root      1727  0.0  0.0      0     0 ?        I    03:00   0:00 [kworker/0:0-at
 root      1728  0.0  0.0      0     0 ?        I    03:06   0:00 [kworker/0:2-ata_sff]
 joe       1730  0.0  0.1  10600  3028 pts/0    R+   03:10   0:00 ps axu
 ```
+
+Several of these run as root. You should research possible vulnerabilities. 
+
+Next, review network information to see if the target could be a pivot to another machine or if there are virtualization or antivirus softwares. We'll also look at port bindings to see if a running svc is only available on a loopback address instead of a routeable one, because privileges programs listening on the loopback interface could increase our attack surface and probability of privilege escalation.
+
+```console
+// network interfaces
+$ ifconfig -a
+// OR, depending on the distro
+$ ip a
+
+// routing tables
+$ route
+// OR, depending on the distro
+$ routel
+
+// active net conns and listening ports
+$ netstat
+// OR, depending on the distro
+$ ss -anp
+```
+
+Next, firewall rules. We are interested in the firewall's state, profile, and rules when we exploit, but also during privilege escalation. Ex: If a network service is not remotely accessible because it is blocked by the firewall, it is generally accessible locally via the loopback interface. So, if you can interact with the services locally, you could exploit them for privilege escalation. We'll also look at inbound and outbound port filtering to facilitate port forwarding and tunneling when we need to pivot to an internal network.
+
+On Linux, we need root to list the firewall rules with iptables, but, depending on how the firewall is configured, we can glean info as a standard user. The iptables-persistent package on Debian saves FW rules in files under /etc/iptables by default. The files are used to restore netfilter rules at boot. Often, they have weak perms and are readable by local users.
+
+Also search for files created by the iptables-save command, which dumps the FW config to a file specified by the used. The file is usually used as input for the iptables-restore command to restore rules at boot. If a sys admin ever ran this command, we can search the config dir /etc or grep the file system for iptables commands to locate the file. If it has insecure perms, we can use it to infer the FW config rules.
+
+```console
+$ cat /etc/iptables/rules.v4
+
+// note down any non-standard rules
+```
+
+The Linux job scheduler is cron and tasks are listed under /etc/cron.* dirs, where the * is the frequency at which the task runs (Ex: /etc/cron.daily). Each script is listed in its own subdir.
+
+```console
+$ ls -lah /etc/cron*
+```
+
+Note that some sysadmins add their own tasks to /etc/crontab. Inspect these tasks for insecure file perms, since most jobs here will run as root.
+
+```console
+// list current user's scheduled jobs
+$ crontab -l
+// if you can, list with SUDO to see jobs run as root
+$ sudo crontab -l
+```
+
+Now, check installed apps and versions to search for a matching exploit.
+
+```console
+// if target is Debian
+$ dpkg -l
+
+// if target is Red Hat
+$ rpm
+
+// find writable files and see if they match what you found
+$ find / -writable -type d 2>/dev/null
+```
+
+Moving on to drives. Drives are usually auto-mounted at boot and it can be easy to forget about unmounted drives that we mat find info in. Always look for unmounted drives and the mount permissions.
+
+```console
+// list all drives that are mounted at boot
+$ cat /etc/fstab
+
+// list all mounted filesystems
+$ mount
+
+// list all available disks
+$ lsblk
+// depending on the system config, you may be able to mount unmounted pertitions and search for interesting documents, creds, or other info
+```
+
+Kernel  modules and device drivers exploits are common for privilege escalation. 
+
+```console
+// list drivers and kernel modules
+$ lsmod
+
+// get info about specific module
+$ /sbin/modinfo libata
+```
+
+Now, let's look at some shortcuts to privilege escalation. In addition to rwx perms, we have rights pertaining to setuid and setgid, symbolized with "s". This perm lets the current user execute the file with rights of the owner (setuid) or owner's group (setgid).
+
+```console
+// find SUID-marked binaries
+$ find / -perm -u=s -type f 2>/dev/null
+```
+
+An example of a good SUID binary exploitation is if /bin/cp (the copy command) were SUID, we can copy and overwrite sensitive files like /etc/password. 
+
+## Automated Enumeration
