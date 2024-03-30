@@ -500,3 +500,43 @@ socks5  127.0.0.1 9998
 
 kali$ proxychains nmap -vvv -sT --top-ports=20 -Pn -n 10.4.188.64 
 ```
+
+### Using sshuttle
+
+If we have direct access to an SSH server which is in front of a more complex internal network, classic dynamic port forwarding may be difficult. Sshuttle turns an SSH conn into something VPN-like by setting up local routes that force traffic thru the SSH tunnel.
+
+Sshuttle requires root privileges on the SSH client AND python3 on the SSH server.
+
+```
+10.4.194.215 PGDATABASE01
+192.168.194.63 CONFLUENCE01
+172.16.194.217 HRSHARES
+```
+
+Imagine we have SSH access on PGDATABASE01 which we can access through a port forward on CONFLUENCE01. We'll run sshuttle thru this port forward.
+
+```console
+confluence$ socat TCP-LISTEN:2222,fork TCP:10.4.194.215:22
+
+kali$ sshuttle -r database_admin@192.168.194.63:2222 10.4.194.0/24 172.16.194.0/24
+c : Connected to server.
+```
+
+Sshuttle should have set up the routing on Kali so any requests we make to hosts in the subnets we specified will be pushed thru the SSH conn.
+
+```console
+kali$ smbclient -L //172.16.194.217/ -U hr_admin --password=Welcome1234
+        Sharename       Type      Comment
+        ---------       ----      -------
+        ADMIN$          Disk      Remote Admin
+        C$              Disk      Default share
+        IPC$            IPC       Remote IPC
+        Scripts         Disk      
+        Users           Disk      
+Reconnecting with SMB1 for workgroup listing.
+do_connect: Connection to 172.16.194.217 failed (Error NT_STATUS_RESOURCE_NAME_NOT_FOUND)
+Unable to connect with SMB1 -- no workgroup available
+```
+
+## Port Forwarding with Windows Tools
+
