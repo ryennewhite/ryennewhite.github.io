@@ -685,3 +685,68 @@ Windows has a native way to create a port forward. The firewall config tool Nets
 
 Netsh requires admin privileges.
 
+```
+192.168.212.64 MULTISERVER03
+10.4.212.215 PGDATABASE01
+```
+
+We have a MULTISERVER03 web app on 80 and RDP on 3389.
+
+Let's try to SSH into PGDATABASE01 directly from Kali.
+
+```console
+kali$ xfreerdp /u:rdp_admin /p:P@ssw0rd! /v:192.168.212.64
+```
+
+In the GUI RDP session, run cmd.exe as Administrator.
+
+```console
+> netsh interface portproxy add v4tov4 listenport=2222 listenaddress=192.168.212.64 connectport=22 connectaddress=10.4.212.215
+
+// check it is listening
+
+> netstat -anp TCP | find "2222"
+  TCP    192.168.212.64:2222    0.0.0.0:0              LISTENING
+
+// confirm port forward is stored
+
+> netsh interface portproxy show all
+Listen on ipv4:             Connect to ipv4:
+
+Address         Port        Address         Port
+--------------- ----------  --------------- ----------
+192.168.212.64  2222        10.4.212.215    22
+```
+
+Bad news - can't connect to 2222 from Kali?
+
+```console
+kali$ sudo nmap -sS 192.168.212.64 -Pn -n -p2222
+PORT     STATE    SERVICE
+2222/tcp filtered EtherNetIP-1
+```
+
+Port 2222 is filtered... The firewall must be blocking inbound connections. Let poke a hole in the firewall. DON'T FORGET TO DELETE THE RULE LATER!
+
+```console
+> netsh advfirewall firewall add rule name="port_forward_ssh_2222" protocol=TCP dir=in localip=192.168.212.64 localport=2222 action=allow
+Ok.
+```
+
+Now, scan the port again from Kali.
+
+```console
+kali$ sudo nmap -sS 192.168.212.64 -Pn -n -p2222
+PORT     STATE SERVICE
+2222/tcp open  EtherNetIP-1
+
+kali$ ssh database_admin@192.168.212.64 -p2222
+```
+
+Once you've done what you needed to do, delete the rule and port forward:
+
+```console
+> netsh advfirewall firewall delete rule name="port_forward_ssh_2222"
+
+> netsh interface portproxy del v4tov4 listenport=2222 listenaddress=192.168.212.64
+```
