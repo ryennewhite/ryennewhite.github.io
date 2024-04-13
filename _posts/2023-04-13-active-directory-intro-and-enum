@@ -395,3 +395,131 @@ member
 ## Manual Enumeration - Expanding our Repertoire
 
 ### Enumerating Operating Systems
+
+```console
+PS> Get-NetComputer
+// lots of output
+
+// many attribures are interesting, use select to get them
+
+PS> Get-NetComputer | select operatingsystem,dnshostname
+operatingsystem              dnshostname
+---------------              -----------
+Windows Server 2022 Standard DC1.corp.com
+Windows Server 2022 Standard web04.corp.com
+Windows Server 2022 Standard FILES04.corp.com
+Windows 11 Pro               client74.corp.com
+Windows 11 Pro               client75.corp.com
+Windows 10 Pro               CLIENT76.corp.com
+```
+
+### Getting an Overview - Permissions and Logged on Users
+
+When a user logs in to the domain, their credentials are cached in memory on the computer they logged in from. If we can steal those creds, we may be able to use them to authenticate as the domain user and potentially escalate domain privileges.
+
+During an AD assessment, though, we may not always want to escalate our privileges right away. We should try to maintain our access, and if we can compromise other users that have the same perms as the user we currently have access to, this allows us to maintain our foothold. 
+
+In order to find possible attack paths, we'll need to learn more about our initial user and see what else we have access to in the domain. We also need to find out where other users are logged in. 
+
+PowerView's Find-LocalAdminAccess command scans the network in an attempt to determine if our current user has administrative permissions on any computers in the domain.
+
+```console
+PS> Find-LocalAdminAccess
+client74.corp.com
+```
+
+Stephanie has Local admin on Client 74. Pause! Do not immediately log in to CLIENT74 to check perms. Zoom out.
+
+Find currently logged in users.
+
+```console
+PS> Get-NetSession -ComputerName files04 -Verbose
+VERBOSE: [Get-NetSession] Error: Access is denied
+
+PS> Get-NetSession -ComputerName web04 -Verbose
+VERBOSE: [Get-NetSession] Error: Access is denied
+```
+
+Priv issues... Run it as stephanie against the machine she has local admin on.
+
+```console
+PS> Get-NetSession -ComputerName client74 -Verbose
+CName        : \\192.168.154.75
+UserName     : stephanie
+Time         : 0
+IdleTime     : 0
+ComputerName : client74
+```
+
+The permissions required to enumerate sessions with NetSessionEnum are defined in the SrvsvcSessionInfo registry key, which is located in the HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LanmanServer\DefaultSecurity hive.
+
+```console
+PS> Get-Acl -Path HKLM:SYSTEM\CurrentControlSet\Services\LanmanServer\DefaultSecurity\ | fl
+
+Path   : Microsoft.PowerShell.Core\Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\LanmanServer\Defaul
+         tSecurity\
+Owner  : NT AUTHORITY\SYSTEM
+Group  : NT AUTHORITY\SYSTEM
+Access : BUILTIN\Users Allow  ReadKey
+         BUILTIN\Administrators Allow  FullControl
+         NT AUTHORITY\SYSTEM Allow  FullControl
+         CREATOR OWNER Allow  FullControl
+         APPLICATION PACKAGE AUTHORITY\ALL APPLICATION PACKAGES Allow  ReadKey
+         S-1-15-3-1024-1065365936-1281604716-3511738428-1654721687-432734479-3232135806-4053264122-3456934681 Allow
+         ReadKey
+Audit  :
+Sddl   : O:SYG:SYD:AI(A;CIID;KR;;;BU)(A;CIID;KA;;;BA)(A;CIID;KA;;;SY)(A;CIIOID;KA;;;CO)(A;CIID;KR;;;AC)(A;CIID;KR;;;S
+         -1-15-3-1024-1065365936-1281604716-3511738428-1654721687-432734479-3232135806-4053264122-3456934681)
+```
+
+Let's look at the OS versions in use.
+
+```console
+PS> Get-NetComputer | select dnshostname,operatingsystem,operatingsystemversion
+dnshostname       operatingsystem              operatingsystemversion
+-----------       ---------------              ----------------------
+DC1.corp.com      Windows Server 2022 Standard 10.0 (20348)
+web04.corp.com    Windows Server 2022 Standard 10.0 (20348)
+FILES04.corp.com  Windows Server 2022 Standard 10.0 (20348)
+client74.corp.com Windows 11 Enterprise        10.0 (22000)
+client75.corp.com Windows 11 Enterprise        10.0 (22000)
+CLIENT76.corp.com Windows 10 Pro               10.0 (16299)
+```
+
+Because of this, we will not be able to use PowerView to build the domain map we had in mind on systems since Windows Server 2019 build 1809.
+
+There are more tools we can use if we run into this.
+
+```console
+PS> .\PsLoggedon.exe \\files04
+PsLoggedon v1.35 - See who's logged on
+Copyright (C) 2000-2016 Mark Russinovich
+Sysinternals - www.sysinternals.com
+
+Users logged on locally:
+     <unknown time>             CORP\jeff
+Unable to query resource logons
+
+PS> .\PsLoggedon.exe \\web04
+
+PsLoggedon v1.35 - See who's logged on
+Copyright (C) 2000-2016 Mark Russinovich
+Sysinternals - www.sysinternals.com
+
+No one is logged on locally.
+Unable to query resource logons
+
+PS> .\PsLoggedon.exe \\client74
+PsLoggedon v1.35 - See who's logged on
+Copyright (C) 2000-2016 Mark Russinovich
+Sysinternals - www.sysinternals.com
+
+Users logged on locally:
+     <unknown time>             CORP\jeffadmin
+
+Users logged on via resource shares:
+     4/13/2024 3:14:54 PM       CORP\stephanie
+```
+
+If our enumeration is accurate and we in fact have administrative privileges on CLIENT74, we should be able to log in there and possibly steal jeffadmin's credentials!
+
