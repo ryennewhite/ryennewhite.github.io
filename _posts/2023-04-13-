@@ -1,0 +1,397 @@
+---
+title: Active Directory Introduction and Enumeration
+date: 2024-04-013 09:29:00 -0600
+categories: [OSCP]
+tags: [oscp, pen200, offsec, certs]     # TAG names should always be lowercase
+---
+*The Active Directory Introduction and Enumeration tools and tactics reviewed here are presented specifically in preparation for the OSCP exam per course suggestions and are by no means replacements for the OSCP training course, nor comprehensive guides for this step in the Kill Chain.*
+
+# Active Directory Introduction and Enumeration
+
+Active Directory Domain Services is a service that allows system administrators to update and manage operating systems, applications, users, and data access on a large scale.
+
+## Active Directory - Introduction
+
+All ADs have a domain name, like "corp.com", for which "corp" is often the org's name. AD relies on the DNS service and a typical domain contrller (DC) will also host a DNS server that is authoritative for the domain.
+
+The objects (users, groups, and computers) are often organized into Organizational Units (OUs), which are comparable to file system folders.
+
+AD relies on many things, like how user login requests are sent to the DC which checks whether or not that user is allowed to log in to that domain. One or more DCs act as the hub and core of the domain.
+
+Members of Domain Admin are the most privileged objects in the domain, and compromising this member gives complete control over the domain.
+
+AD instances can host more than one domain in a domain tree or multiple domain trees in a domain forest. There are Domain Admins for each domain in the forest, and there is an Enterprise Admin that has full control over all domains in the forest and has Admin privs over all DCs.
+
+We will leverage a variety of tools to manually enumerate AD, most of which rely on the Lightweight Directory Access Protocol (LDAP).
+
+### Enumeration - Defining Our Goals
+
+In this case, we are investigating corp.com under the assumed breach of stephanie, who has RDP perms on Win11. We will perform the enumeration from one client machine with the low privileged stephanie domain user.
+
+Once we gain access to additional users or computers, we will have to repeat parts of enum. This is the "pivot", and each one may give opportunitiy to advance our attack. 
+
+## Active Directory - Manual Enumeration
+
+### Active Directory - Enumeration Using Legacy Windows Tools
+
+```
+192.168.154.*
+```
+
+RDP to stephanie's client.
+
+```console
+$ xfreerdp /u:stephanie /d:corp.com /v:192.168.154.75
+Password: LegmanTeamBenzoin!!
+```
+
+On her desktop, use cmd.
+
+```console
+> net user /domain
+The request will be processed at a domain controller for domain corp.com.
+
+
+User accounts for \\DC1.corp.com
+
+-------------------------------------------------------------------------------
+Administrator            dave                     Guest
+iis_service              jeff                     jeffadmin
+jen                      krbtgt                   pete
+stephanie
+
+// check out jeffadmin
+
+> net user jeffadmin /domain
+The request will be processed at a domain controller for domain corp.com.
+
+User name                    jeffadmin
+Full Name
+Comment
+User's comment
+Country/region code          000 (System Default)
+Account active               Yes
+Account expires              Never
+
+Password last set            9/2/2022 4:26:48 PM
+Password expires             Never
+Password changeable          9/3/2022 4:26:48 PM
+Password required            Yes
+User may change password     Yes
+
+Workstations allowed         All
+Logon script
+User profile
+Home directory
+Last logon                   1/8/2024 4:47:01 AM
+
+Logon hours allowed          All
+
+Local Group Memberships      *Administrators
+Global Group memberships     *Domain Users         *Domain Admins
+
+// jeff is a domain admin! take note of this and remember it for later.
+
+> net group /domain
+Group Accounts for \\DC1.corp.com
+
+-------------------------------------------------------------------------------
+*Cloneable Domain Controllers
+*Debug
+*Development Department *****
+*DnsUpdateProxy
+*Domain Admins
+*Domain Computers
+*Domain Controllers
+*Domain Guests
+*Domain Users
+*Enterprise Admins
+*Enterprise Key Admins
+*Enterprise Read-only Domain Controllers
+*Group Policy Creator Owners
+*Key Admins
+*Management Department *****
+*Protected Users
+*Read-only Domain Controllers
+*Sales Department *****
+*Schema Admins
+
+// the non-default domains listed here are Development Department, Management Department, and Sales Department.
+
+> net group "Sales Department" /domain
+Group name     Sales Department
+Comment
+
+Members
+
+-------------------------------------------------------------------------------
+pete                     stephanie
+```
+
+### Enumerating Active Directory using PowerShell and .NET Classes
+
+PowerShell cmdlets like Get-ADUser1 work well but they are only installed by default on domain controllers as part of the Remote Server Administration Tools (RSAT), which is rarely present on clients and we would need admin privs to install.
+
+We could, in principle, import the DLL required for enum, but we won't cover that here.
+
+When a domain machine searches for an object, like a printer, or when we query user or group objects, LDAP is used as the communication channel for the query.
+
+We need a specific LDAP ADsPath in order to communicate with the AD service.
+
+```
+LDAP://HostName[:PortNumber][/DistinguishedName]
+```
+
+Host name can be a computer name, IP, or domain naim. Note that if there are multiple DCs, setting the domain name could resolve to any of the DCs IP addresses. We should use the IP of the DC with the most updated info, called the Primary Domain Controller (PDC).  The port number is optional. It will automatically choose the port based on whether or not we are using an SSL connection. However, it is worth noting that if we come across a domain in the future using non-default ports, we may need to manually add this to the script.
+
+Let's write the script, .\enumeration.ps1.
+
+```
+# Store the domain object in the $domainObj variable
+$domainObj = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+
+# Store the PdcRoleOwner name to the $PDC variable
+$PDC = $domainObj.PdcRoleOwner.Name
+
+# Store the Distinguished Name variable into the $DN variable
+$DN = ([adsi]'').distinguishedName
+
+$LDAP = "LDAP://$PDC/$DN"
+$LDAP
+```
+
+```console
+PS> powershell -ep bypass
+
+PS>  .\enumeration.ps1
+LDAP://DC1.corp.com/DC=corp,DC=com
+```
+
+Now, we have the full LDAP path required for enum.
+
+### Adding Search Functionality to our Script
+
+```
+$domainObj = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$PDC = $domainObj.PdcRoleOwner.Name
+$DN = ([adsi]'').distinguishedName
+$LDAP = "LDAP://$PDC/$DN"
+
+$direntry = New-Object System.DirectoryServices.DirectoryEntry($LDAP)
+
+$dirsearcher = New-Object System.DirectoryServices.DirectorySearcher($direntry)
+$dirsearcher.FindAll()
+```
+
+One thing to note with DirectoryEntry is that we can pass it credentials to authenticate to the domain. However, since we are already logged in, there is no need to do that here.
+
+Running the above script will produce a lot of output. We can filer using samAccountType and other methods.
+
+The official documentation reveals different values of the samAccountType attribute, but we'll start with 0x30000000 (decimal 805306368), which will enumerate all users in the domain.
+
+We will also add an interation through each object to print each property on its own line.
+
+```
+$domainObj = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+$PDC = $domainObj.PdcRoleOwner.Name
+$DN = ([adsi]'').distinguishedName
+$LDAP = "LDAP://$PDC/$DN"
+
+$direntry = New-Object System.DirectoryServices.DirectoryEntry($LDAP)
+
+$dirsearcher = New-Object System.DirectoryServices.DirectorySearcher($direntry)
+$dirsearcher.filter="samAccountType=805306368"
+$result = $dirsearcher.FindAll()
+
+Foreach($obj in $result)
+{
+    Foreach($prop in $obj.Properties)
+    {
+        $prop
+    }
+
+    Write-Host "-------------------------------"
+}
+```
+
+This complete script will search through AD and filter the results based on the samAccountType of our choosing.
+
+We can filter based on any property of any object type. For example, we can change the script to filter for name=jeffadmin and added .memberof to the $prop variable to only display the groups jeffadmin is a member of.
+
+```
+$dirsearcher = New-Object System.DirectoryServices.DirectorySearcher($direntry)
+$dirsearcher.filter="name=jeffadmin"
+$result = $dirsearcher.FindAll()
+
+Foreach($obj in $result)
+{
+    Foreach($prop in $obj.Properties)
+    {
+        $prop.memberof
+    }
+
+    Write-Host "-------------------------------"
+}
+```
+
+We can make the script more flexible, allowing us to add the required parameters via the command line. For example, we could have the script accept the samAccountType we wish to enumerate as a command line argument.
+
+```
+function LDAPSearch {
+    param (
+        [string]$LDAPQuery
+    )
+
+    $PDC = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain().PdcRoleOwner.Name
+    $DistinguishedName = ([adsi]'').distinguishedName
+
+    $DirectoryEntry = New-Object System.DirectoryServices.DirectoryEntry("LDAP://$PDC/$DistinguishedName")
+
+    $DirectorySearcher = New-Object System.DirectoryServices.DirectorySearcher($DirectoryEntry, $LDAPQuery)
+
+    return $DirectorySearcher.FindAll()
+
+}
+```
+
+To use this, you will need to do the following:
+
+```console
+PS> Import-Module .\function.ps1
+PS> LDAPSearch -LDAPQuery "(samAccountType=805306368)"
+```
+
+We can also search directly for an Object Class, which is a component of AD that defines the object type. Let's use objectClass=group in this case to list all the groups in the domain:
+
+```console
+PS> LDAPSearch -LDAPQuery "(objectclass=group)"
+LDAP://DC1.corp.com/CN=Read-only Domain Controllers,CN=Users,DC=corp,DC=com            {usnchanged, distinguishedname, grouptype, whencreated...}
+LDAP://DC1.corp.com/CN=Enterprise Read-only Domain Controllers,CN=Users,DC=corp,DC=com {iscriticalsystemobject, usnchanged, distinguishedname, grouptype...}
+...
+```
+
+This script enumerates more tha net.exe! This is because it enumerates all AD objects including Domain Local groups (not just global groups).
+
+We can also call this in the cmd line such that we can print properties and attributes for objects.
+
+```console
+PS> foreach ($group in $(LDAPSearch -LDAPQuery "(objectCategory=group)")){ $group.properties | select {$_.cn}, {$_.member} }
+```
+
+Earlier when we enumerated the Sales Department group with net.exe, we only found two users in it: pete and stephanie. In this case however, it appears that Development Department is also a member.
+
+For easier to read output, pipe the output into a variable and print the attribute of the variable.
+
+```console
+PS> $sales = LDAPSearch -LDAPQuery "(&(objectCategory=group)(cn=Sales Department))"
+PS> $sales.properties.member
+```
+
+This group within a group is known as a nested group, which are common. net.exe missed this because it only lists user objects, not group objects. net.exe also cannot display specific attributes. 
+
+Let's enum the Development Department more.
+
+```console
+PS> $group = LDAPSearch -LDAPQuery "(&(objectCategory=group)(cn=Development Department*))"
+
+PS> $group.properties.member
+CN=Management Department,DC=corp,DC=com
+CN=pete,CN=Users,DC=corp,DC=com
+CN=dave,CN=Users,DC=corp,DC=com
+```
+
+Another nested group - Management Department is a member of Development Department. 
+
+```console
+PS> $group = LDAPSearch -LDAPQuery "(&(objectCategory=group)(cn=Management Department*))"
+PS> $group.properties.member
+CN=jen,CN=Users,DC=corp,DC=com
+```
+
+We found the end! Note that jen is a member of Management Department, but also an indirect member of Sales Department and Development Department. This is normal for AD, but, if misconfigured, users might end up with more privileges than they should.
+
+## AD Enumeration with PowerView
+
+PowerView is a popular PS script for enum.
+
+```console
+PS> Import-Module .\PowerView.ps1
+
+PS> Get-NetDomain
+Forest                  : corp.com
+DomainControllers       : {DC1.corp.com}
+Children                : {}
+DomainMode              : Unknown
+DomainModeLevel         : 7
+Parent                  :
+PdcRoleOwner            : DC1.corp.com
+RidRoleOwner            : DC1.corp.com
+InfrastructureRoleOwner : DC1.corp.com
+Name                    : corp.com
+
+PS> Get-NetUser
+
+// too much output
+
+PS> Get-NetUser | select cn
+Administrator
+Guest
+krbtgt
+dave
+stephanie
+jeff
+jeffadmin
+iis_service
+pete
+jen
+nathalie
+fred
+bob
+robert
+dennis
+michelle
+```
+
+NOTE that passwords set a long time ago may be weaker than the current policy, making them easier to crack.
+
+```console
+PS> Get-NetUser | select cn,pwdlastset,lastlogon
+cn            pwdlastset            lastlogon
+--            ----------            ---------
+Administrator 8/16/2022 5:27:22 PM  4/13/2024 9:19:47 AM
+Guest         12/31/1600 4:00:00 PM 12/31/1600 4:00:00 PM
+krbtgt        9/2/2022 4:10:48 PM   12/31/1600 4:00:00 PM
+dave          9/7/2022 9:54:57 AM   4/13/2024 9:22:05 AM
+stephanie     9/2/2022 4:23:38 PM   4/13/2024 9:18:20 AM
+jeff          9/2/2022 4:27:20 PM   12/18/2023 11:55:16 PM
+jeffadmin     9/2/2022 4:26:48 PM   1/8/2024 3:47:01 AM
+iis_service   9/7/2022 5:38:43 AM   3/1/2023 3:40:02 AM
+pete          9/6/2022 12:41:54 PM  2/1/2023 2:42:42 AM
+jen           9/6/2022 12:43:01 PM  1/8/2024 1:26:03 AM
+nathalie      4/13/2024 9:17:51 AM  12/31/1600 4:00:00 PM
+fred          4/13/2024 9:17:52 AM  12/31/1600 4:00:00 PM
+bob           4/13/2024 9:17:52 AM  12/31/1600 4:00:00 PM
+robert        4/13/2024 9:17:52 AM  12/31/1600 4:00:00 PM
+dennis        4/13/2024 9:17:52 AM  12/31/1600 4:00:00 PM
+michelle      4/13/2024 9:17:52 AM  12/31/1600 4:00:00 PM
+
+PS> Get-NetGroup | select cn
+...
+Key Admins
+Enterprise Key Admins
+DnsAdmins
+DnsUpdateProxy
+Sales Department
+Management Department
+Development Department
+Debug
+
+PS> Get-NetGroup "Sales Department" | select member
+member
+------
+{CN=Development Department,DC=corp,DC=com, CN=pete,CN=Users,DC=corp,DC=com, CN=stephanie,CN=Users,DC=corp,DC=com}
+```
+
+## Manual Enumeration - Expanding our Repertoire
+
+### Enumerating Operating Systems
