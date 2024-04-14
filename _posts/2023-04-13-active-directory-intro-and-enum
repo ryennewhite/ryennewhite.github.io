@@ -554,7 +554,7 @@ Name:    web04.corp.com
 Address:  192.168.154.72
 ```
 
-We see that this hostname is resolving to an internal IP. Navigating to the IP results in a webset with a login requirement.
+We see that this hostname is resolving to an internal IP. Navigating to the IP results in a website with a login requirement.
 
 In this case, we will note and remember that the IIS service has a linked SPN, which might run with more privielges than regular domain user accounts.
 
@@ -676,7 +676,7 @@ sharing           0                        client75.corp.com
 PS> ls \\dc1.corp.com\sysvol\corp.com\
 Directory: \\dc1.corp.com\sysvol\corp.com
 
-
+net 
 Mode                 LastWriteTime         Length Name
 ----                 -------------         ------ ----
 d-----         9/21/2022   1:11 AM                Policies
@@ -773,3 +773,80 @@ Jeff
 ```
 
 ## Active Directory - Automated Enumeration
+
+### Collecting Data with SharpHound
+
+SharpHound uses Windows API functions and LDAP namespace functions similar to the ones we used manually. We should combine automatic and manual enum for AD assessments.
+
+SharpHound is available in a few different formats. We can compile it ourselves, use an already compiled executable, or use it as a PowerShell script.
+
+```console
+PS> Import-Module .\Sharphound.ps1
+
+// look at man
+
+PS> Get-Help Invoke-BloodHound
+
+// this might take a second
+
+PS> Invoke-BloodHound -CollectionMethod All -OutputDirectory C:\Users\stephanie\Desktop\ -OutputPrefix "corp audit"
+2024-04-14T08:25:17.0557117-07:00|INFORMATION|Status: 106 objects finished
+INFORMATION|SharpHound Enumeration Completed at 8:25 AM on 4/14/2024! Happy Graphing!
+
+PS> ls C:\Users\stephanie\Desktop\
+Mode                 LastWriteTime         Length Name
+----                 -------------         ------ ----
+-a----         4/14/2024   8:25 AM          12579 corp audit_20240414082516_BloodHound.zip
+-a----         4/14/2024   8:25 AM           9474 MTk2MmZkNjItY2IyNC00MWMzLTk5YzMtM2E1ZDcwYThkMzRl.bin
+```
+
+You can safely deleted the bin file - we won't need it.
+
+### Analysing Data using BloodHound
+
+We will analyze the domain data using BloodHound in Kali Linux, but it should be noted that we could install the application and required dependencies on Windows-based systems as well.
+
+```console
+$ sudo neo4j start
+```
+
+Navigate in a browser to http://localhost:7474/.
+
+```console
+$ bloodhound
+```
+
+Upload the zip file to BloodHound. Once the upload is complete, click More Info in the top left to see the Database Info. Click the Analysis button, and look for Find all Domain Admins. You will see a graph of the admins.
+
+You can use the Analysis > Shortest Paths to see the shortest path to reaching our goal. For example, use "Find Shortest Paths to Domain Admins".
+
+In the ? Help menu BloodHound also offers information in the Abuse tab, which will tell us more about the possible attack we can take on the given path. It also contains Opsec information as what to look out for when it comes to being detected, as well as references to the information displayed.
+
+After further reading of Figure {@fig:ad_enum_bh_DA_short}, and after further inspection of the graph, we discover the connection jeffadmin has to CLIENT74. This means that the credentials for jeffadmin may be cached on the machine, which could be fatal for the organization. If we are able to take advantage of the given attack path and steal the credentials for jeffadmin, we should be able to log in as him and become domain admin.
+
+As another example, try "Shortest Paths to Domain Admins from Owned Principals". In our example, we don't get any data returned. Owned Principals refers to the objects we are currently in control of in the domain. We can mark any object we'd like as owned in BloodHound, even if we haven't obtained access to them. In order for us to obtain an owned principal in BloodHound, we will run a search (top left), right click the object that shows in the middle of the screen, and click Mark User as Owned.
+
+It's a good idea to mark every object we have access to as owned to improve our visibility into more potential attack vectors. There may be a short path to our goals that hinges on ownership of a particular object.
+
+Additional example:
+
+Have GenericAll? Change the user's password!
+
+```console
+PS> PS C:\Tools\PSTools> Set-DomainUserPassword -Identity robert
+
+cmdlet Set-DomainUserPassword at command pipeline position 1
+Supply values for the following parameters:
+AccountPassword: ***************
+PS C:\Tools\PSTools>
+```
+
+Now, runas them to find where they may be a local admin.
+
+```console
+PS> runas /user:robert@corp cmd.exe
+
+PS> Find-LocalAdminAccess
+```
+
+Log into that system as them.
