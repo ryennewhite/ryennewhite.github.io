@@ -225,6 +225,8 @@ Now, let's look at some shortcuts to privilege escalation. In addition to rwx pe
 ```console
 // find SUID-marked binaries
 $ find / -perm -u=s -type f 2>/dev/null
+
+$ find / -perm -4000 2>/dev/null
 ```
 
 An example of a good SUID binary exploitation is if /bin/cp (the copy command) were SUID, we can copy and overwrite sensitive files like /etc/password. 
